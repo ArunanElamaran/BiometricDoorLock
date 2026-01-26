@@ -44,7 +44,7 @@ def detect_faces_and_eyes(img, gray, face_cascade, eye_cascade, scale_factor=1.3
     
     return img
 
-def static_image_analysis(
+def plain_static_image_analysis(
     img_path: str,
     face_cascade_path: str = '../../haarcascades_models/haarcascade_frontalface_default.xml',
     eye_cascade_path: str = '../../haarcascades_models/haarcascade_eye.xml'
@@ -85,7 +85,7 @@ def display_intermediate_stage(img, stage_name, wait_time=0):
         cv2.waitKey(wait_time)
     # Note: Windows are destroyed at the end of the main function
 
-def static_image_analysis_approach_2(
+def facial_alignment(
     img_path: str,
     face_cascade_path: str = '../../haarcascades_models/haarcascade_frontalface_default.xml',
     eye_cascade_path: str = '../../haarcascades_models/haarcascade_eye.xml'
@@ -95,22 +95,27 @@ def static_image_analysis_approach_2(
 
     # ------ Reading the image ------
     img = cv2.imread(img_path)
-    display_intermediate_stage(img, "Original Image", wait_time=0)
+    # display_intermediate_stage(img, "Original Image", wait_time=0)
 
     # ------ Face detection ------
     faces = face_detector.detectMultiScale(img, 1.3, 5)
+
+    if len(faces) == 0:
+        return None
+        # raise ValueError(f"Expected at least 1 face, but no face detected")
+        
     # Draw face detection on original image for visualization
     img_with_face_detection = img.copy()
     for (fx, fy, fw, fh) in faces:
         cv2.rectangle(img_with_face_detection, (fx, fy), (fx+fw, fy+fh), (255, 0, 0), 2)
-    display_intermediate_stage(img_with_face_detection, "Post Face Detection", wait_time=0)
+    # display_intermediate_stage(img_with_face_detection, "Post Face Detection", wait_time=0)
     
     face_x, face_y, face_w, face_h = faces[0]
     img = img[int(face_y):int(face_y+face_h), int(face_x):int(face_x+face_w)]
     
     # Image to perform overlays on
     img_to_edit = img.copy()
-    display_intermediate_stage(img, "Cropped Face Region", wait_time=0)
+    # display_intermediate_stage(img, "Cropped Face Region", wait_time=0)
     img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
     # ------ Eye detection ------
@@ -125,7 +130,8 @@ def static_image_analysis_approach_2(
     
     # Ensure we have at least 2 eyes, otherwise raise an error
     elif len(eyes) < 2:
-        raise ValueError(f"Expected at least 2 eyes, but only {len(eyes)} eye(s) detected")
+        return None
+        # raise ValueError(f"Expected at least 2 eyes, but only {len(eyes)} eye(s) detected")
  
     index = 0
     color = (0, 255, 0)  # Green color for eye bounding boxes
@@ -138,7 +144,7 @@ def static_image_analysis_approach_2(
         cv2.rectangle(img_to_edit,(eye_x, eye_y),(eye_x+eye_w, eye_y+eye_h), color, 2)
         index = index + 1
     
-    display_intermediate_stage(img_to_edit, "Post Eye Detection", wait_time=0)
+    # display_intermediate_stage(img_to_edit, "Post Eye Detection", wait_time=0)
 
     # Determine left eye vs. right eye
     if eye_1[0] < eye_2[0]:
@@ -181,7 +187,7 @@ def static_image_analysis_approach_2(
     cv2.line(img_to_edit,left_eye_center, point_3rd,(67,67,67),2)
     cv2.line(img_to_edit,right_eye_center, point_3rd,(67,67,67),2)
 
-    display_intermediate_stage(img_to_edit, "Eye Centers and Alignment Lines", wait_time=0)
+    # display_intermediate_stage(img_to_edit, "Eye Centers and Alignment Lines", wait_time=0)
 
     # Trigonometry to calculate angle    
     a = euclidean_distance(left_eye_center, point_3rd)
@@ -205,8 +211,186 @@ def static_image_analysis_approach_2(
     new_img = Image.fromarray(img)
     new_img = np.array(new_img.rotate(direction * angle))
 
-    display_intermediate_stage(new_img, "Final Rotated Image", wait_time=0)
-    cv2.destroyAllWindows()
+    # display_intermediate_stage(new_img, "Final Rotated Image", wait_time=0)
+    # cv2.destroyAllWindows()
+    
+    # Return the rotated, aligned face for facial recognition
+    return new_img
+
+def facial_alignment_from_array(
+    img,
+    face_detector,
+    eye_detector
+):
+    """
+    Perform facial alignment on a numpy array image (BGR format).
+    This is the core alignment logic extracted from facial_alignment for use with camera frames.
+    
+    Args:
+        img: Numpy array image in BGR format
+        face_detector: CascadeClassifier for face detection
+        eye_detector: CascadeClassifier for eye detection
+    
+    Returns:
+        new_img: Rotated, aligned face as numpy array, or None if face/eyes not detected properly
+    """
+    # ------ Face detection ------
+    faces = face_detector.detectMultiScale(img, 1.3, 5)
+
+    if len(faces) == 0:
+        return None
+    
+    face_x, face_y, face_w, face_h = faces[0]
+    img = img[int(face_y):int(face_y+face_h), int(face_x):int(face_x+face_w)]
+    
+    # Image to perform overlays on
+    img_to_edit = img.copy()
+    img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    # ------ Eye detection ------
+    eyes = eye_detector.detectMultiScale(img_gray)
+    
+    # Sort eyes by area (width * height) in descending order and keep only the two largest
+    if len(eyes) > 2:
+        # Calculate area for each eye and sort by area (largest first)
+        eyes_with_area = [(eye, eye[2] * eye[3]) for eye in eyes]  # (x, y, w, h) -> area = w * h
+        eyes_with_area.sort(key=lambda x: x[1], reverse=True)  # Sort by area, descending
+        eyes = [eye for eye, _ in eyes_with_area[:2]]  # Keep only the two largest
+    
+    # Ensure we have at least 2 eyes, otherwise return None
+    elif len(eyes) < 2:
+        return None
+
+    index = 0
+    for (eye_x, eye_y, eye_w, eye_h) in eyes:
+        if index == 0:
+            eye_1 = (eye_x, eye_y, eye_w, eye_h)
+        elif index == 1:
+            eye_2 = (eye_x, eye_y, eye_w, eye_h)
+        index = index + 1
+
+    # Determine left eye vs. right eye
+    if eye_1[0] < eye_2[0]:
+        left_eye = eye_1
+        right_eye = eye_2
+    else:
+        left_eye = eye_2
+        right_eye = eye_1
+
+    # ------ Detect center of the eyes ------
+    left_eye_center = (int(left_eye[0] + (left_eye[2] / 2)), int(left_eye[1] + (left_eye[3] / 2)))
+    left_eye_x = left_eye_center[0]; left_eye_y = left_eye_center[1]
+    
+    right_eye_center = (int(right_eye[0] + (right_eye[2]/2)), int(right_eye[1] + (right_eye[3]/2)))
+    right_eye_x = right_eye_center[0]; right_eye_y = right_eye_center[1]
+
+    # ------ Determine direction of rotation ------
+    if left_eye_y > right_eye_y:
+        point_3rd = (right_eye_x, left_eye_y)
+        direction = -1 # rotate same direction to clock
+    else:
+        point_3rd = (left_eye_x, right_eye_y)
+        direction = 1 # rotate inverse direction of clock
+
+    # Trigonometry to calculate angle    
+    a = euclidean_distance(left_eye_center, point_3rd)
+    b = euclidean_distance(right_eye_center, left_eye_center)
+    c = euclidean_distance(right_eye_center, point_3rd)
+
+    cos_a = (b*b + c*c - a*a)/(2*b*c)
+    
+    angle = np.arccos(cos_a)
+    angle = (angle * 180) / math.pi
+
+    if direction == -1:
+        angle = 90 - angle
+
+    from PIL import Image
+    # Rotate only the extracted face region (img) instead of the full image
+    new_img = Image.fromarray(img)
+    new_img = np.array(new_img.rotate(direction * angle))
+    
+    # Return the rotated, aligned face for facial recognition
+    return new_img
+
+def capture_aligned_face_from_camera(
+    camera_index=0,
+    face_cascade_path: str = '../../haarcascades_models/haarcascade_frontalface_default.xml',
+    eye_cascade_path: str = '../../haarcascades_models/haarcascade_eye.xml',
+    display_preview=True
+):
+    """
+    Capture video from camera and stop when a properly detected face is found.
+    
+    Args:
+        camera_index: Index of the camera to use (default: 0)
+        face_cascade_path: Path to face cascade classifier XML file
+        eye_cascade_path: Path to eye cascade classifier XML file
+        display_preview: Whether to display the camera feed with face detection overlay (default: True)
+    
+    Returns:
+        aligned_face: Rotated, aligned face as numpy array, or None if camera fails or no face detected
+    """
+    face_detector = cv2.CascadeClassifier(face_cascade_path)
+    eye_detector = cv2.CascadeClassifier(eye_cascade_path)
+    
+    cap = cv2.VideoCapture(camera_index)
+    
+    if not cap.isOpened():
+        print(f"Error: Could not open camera {camera_index}")
+        return None
+    
+    print("Camera opened. Looking for a face... (Press 'q' to quit)")
+    
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            print("Error: Could not read frame from camera")
+            break
+        
+        # Try to detect and align face in current frame
+        aligned_face = facial_alignment_from_array(frame, face_detector, eye_detector)
+        
+        if display_preview:
+            # Draw face detection on frame for preview
+            faces = face_detector.detectMultiScale(frame, 1.3, 5)
+            preview_frame = frame.copy()
+            for (fx, fy, fw, fh) in faces:
+                cv2.rectangle(preview_frame, (fx, fy), (fx+fw, fy+fh), (255, 0, 0), 2)
+            
+            cv2.imshow('Camera Feed - Looking for Face (Press q to quit)', preview_frame)
+            
+            # Check for 'q' key to quit
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                print("User quit before face was detected")
+                aligned_face = None
+                break
+        
+        # If face was successfully detected and aligned, stop
+        if aligned_face is not None:
+            print("Face detected and aligned successfully!")
+            break
+    
+    cap.release()
+    if display_preview:
+        cv2.destroyAllWindows()
+    
+    return aligned_face
+
+def resize_aligned_face(aligned_face, target_size):
+    """
+    Resize an aligned face image to a specified target size.
+    
+    Args:
+        aligned_face: Numpy array image (output from facial_alignment function)
+        target_size: Tuple of (width, height) for the target size (e.g., (152, 152) or (160, 160))
+    
+    Returns:
+        resized_face: Resized numpy array image with the specified dimensions
+    """
+    width, height = target_size
+    resized_face = cv2.resize(aligned_face, (width, height), interpolation=cv2.INTER_LINEAR)
+    return resized_face
 
 
 ########################################################
@@ -248,8 +432,29 @@ def realtime_video_analysis(
     cv2.destroyAllWindows()
 
 if __name__ == "__main__":
-    # static_image_analysis(img_path='../database/Obama/img1.jpg')
-    # static_image_analysis_approach_2(img_path='../database/tiltedhead.jpg')
-    static_image_analysis_approach_2(img_path='../database/Max/img3.jpg')
+    
+    # 1. Initial testing with a static image
+    # plain_static_image_analysis(img_path='../database/Obama/img1.jpg')
+
+    # 2. Improved testing with a static image + Facial alignment
+    # aligned_face = facial_alignment(img_path='../database/Max/img2.jpg')
+    # if aligned_face is None:
+    #     print("face not detected properly")
+    #     exit()
+    # print(f"Size of aligned face: {aligned_face.shape}")
+    # resized_face = resize_aligned_face(aligned_face, (160, 160))  # For Facenet
+    # print(f"Size of resized face: {resized_face.shape}")
+
+    # 3. Testing with a live video
     # camera_test()
     # realtime_video_analysis()
+    aligned_face = capture_aligned_face_from_camera()
+    cv2.imshow('aligned_face', aligned_face)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
+    if aligned_face is None:
+        print("face not detected properly")
+        exit()
+    print(f"Size of aligned face: {aligned_face.shape}")
+    resized_face = resize_aligned_face(aligned_face, (160, 160))  # For Facenet
+    print(f"Size of resized face: {resized_face.shape}")
