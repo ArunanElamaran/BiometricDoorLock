@@ -95,7 +95,6 @@ def static_image_analysis_approach_2(
 
     # ------ Reading the image ------
     img = cv2.imread(img_path)
-    img_raw = img.copy()
     display_intermediate_stage(img, "Original Image", wait_time=0)
 
     # ------ Face detection ------
@@ -108,6 +107,9 @@ def static_image_analysis_approach_2(
     
     face_x, face_y, face_w, face_h = faces[0]
     img = img[int(face_y):int(face_y+face_h), int(face_x):int(face_x+face_w)]
+    
+    # Image to perform overlays on
+    img_to_edit = img.copy()
     display_intermediate_stage(img, "Cropped Face Region", wait_time=0)
     img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
@@ -133,10 +135,10 @@ def static_image_analysis_approach_2(
         elif index == 1:
             eye_2 = (eye_x, eye_y, eye_w, eye_h)
         
-        cv2.rectangle(img,(eye_x, eye_y),(eye_x+eye_w, eye_y+eye_h), color, 2)
+        cv2.rectangle(img_to_edit,(eye_x, eye_y),(eye_x+eye_w, eye_y+eye_h), color, 2)
         index = index + 1
     
-    display_intermediate_stage(img, "Post Eye Detection", wait_time=0)
+    display_intermediate_stage(img_to_edit, "Post Eye Detection", wait_time=0)
 
     # Determine left eye vs. right eye
     if eye_1[0] < eye_2[0]:
@@ -159,9 +161,9 @@ def static_image_analysis_approach_2(
     print(f"left_eye center  (cx,cy): {left_eye_center}")
     print(f"right_eye center (cx,cy): {right_eye_center}")
     
-    cv2.circle(img, left_eye_center, 2, (255, 0, 0) , 2)
-    cv2.circle(img, right_eye_center, 2, (255, 0, 0) , 2)
-    cv2.line(img,right_eye_center, left_eye_center,(67,67,67),2)
+    cv2.circle(img_to_edit, left_eye_center, 2, (255, 0, 0) , 2)
+    cv2.circle(img_to_edit, right_eye_center, 2, (255, 0, 0) , 2)
+    cv2.line(img_to_edit,right_eye_center, left_eye_center,(67,67,67),2)
 
     # ------ Determine direction of rotation ------
     if left_eye_y > right_eye_y:
@@ -173,13 +175,13 @@ def static_image_analysis_approach_2(
         direction = 1 # rotate inverse direction of clock
         print("rotate to inverse clock direction")
  
-    cv2.circle(img, point_3rd, 2, (255, 0, 0) , 2)
+    cv2.circle(img_to_edit, point_3rd, 2, (255, 0, 0) , 2)
     
-    cv2.line(img,right_eye_center, left_eye_center,(67,67,67),2)
-    cv2.line(img,left_eye_center, point_3rd,(67,67,67),2)
-    cv2.line(img,right_eye_center, point_3rd,(67,67,67),2)
+    cv2.line(img_to_edit,right_eye_center, left_eye_center,(67,67,67),2)
+    cv2.line(img_to_edit,left_eye_center, point_3rd,(67,67,67),2)
+    cv2.line(img_to_edit,right_eye_center, point_3rd,(67,67,67),2)
 
-    display_intermediate_stage(img, "Eye Centers and Alignment Lines", wait_time=0)
+    display_intermediate_stage(img_to_edit, "Eye Centers and Alignment Lines", wait_time=0)
 
     # Trigonometry to calculate angle    
     a = euclidean_distance(left_eye_center, point_3rd)
@@ -199,7 +201,8 @@ def static_image_analysis_approach_2(
         angle = 90 - angle
 
     from PIL import Image
-    new_img = Image.fromarray(img_raw)
+    # Rotate only the extracted face region (img) instead of the full image
+    new_img = Image.fromarray(img)
     new_img = np.array(new_img.rotate(direction * angle))
 
     display_intermediate_stage(new_img, "Final Rotated Image", wait_time=0)
@@ -246,6 +249,7 @@ def realtime_video_analysis(
 
 if __name__ == "__main__":
     # static_image_analysis(img_path='../database/Obama/img1.jpg')
-    static_image_analysis_approach_2(img_path='../database/tiltedhead.jpg')
+    # static_image_analysis_approach_2(img_path='../database/tiltedhead.jpg')
+    static_image_analysis_approach_2(img_path='../database/Max/img3.jpg')
     # camera_test()
     # realtime_video_analysis()
