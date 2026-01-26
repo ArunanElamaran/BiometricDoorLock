@@ -67,6 +67,24 @@ def euclidean_distance(a, b):
         x2 = b[0]; y2 = b[1]
         return math.sqrt(((x2 - x1) * (x2 - x1)) + ((y2 - y1) * (y2 - y1)))
 
+def display_intermediate_stage(img, stage_name, wait_time=0):
+    """
+    Display an image at an intermediate processing stage.
+    
+    Args:
+        img: Image to display (numpy array in BGR format)
+        stage_name: String describing the current stage (e.g., "Post Face Detection", "Post Eye Detection")
+        wait_time: Time in milliseconds to wait. 0 means wait for key press, -1 means don't wait (default: 0)
+    
+    Returns:
+        None
+    """
+    window_title = f"Intermediate Stage: {stage_name}"
+    cv2.imshow(window_title, img)
+    if wait_time >= 0:
+        cv2.waitKey(wait_time)
+    # Note: Windows are destroyed at the end of the main function
+
 def static_image_analysis_approach_2(
     img_path: str,
     face_cascade_path: str = '../../haarcascades_models/haarcascade_frontalface_default.xml',
@@ -78,16 +96,34 @@ def static_image_analysis_approach_2(
     # ------ Reading the image ------
     img = cv2.imread(img_path)
     img_raw = img.copy()
+    display_intermediate_stage(img, "Original Image", wait_time=0)
 
     # ------ Face detection ------
     faces = face_detector.detectMultiScale(img, 1.3, 5)
-    face_x, face_y, face_w, face_h = faces[0]
+    # Draw face detection on original image for visualization
+    img_with_face_detection = img.copy()
+    for (fx, fy, fw, fh) in faces:
+        cv2.rectangle(img_with_face_detection, (fx, fy), (fx+fw, fy+fh), (255, 0, 0), 2)
+    display_intermediate_stage(img_with_face_detection, "Post Face Detection", wait_time=0)
     
+    face_x, face_y, face_w, face_h = faces[0]
     img = img[int(face_y):int(face_y+face_h), int(face_x):int(face_x+face_w)]
+    display_intermediate_stage(img, "Cropped Face Region", wait_time=0)
     img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
     # ------ Eye detection ------
     eyes = eye_detector.detectMultiScale(img_gray)
+    
+    # Sort eyes by area (width * height) in descending order and keep only the two largest
+    if len(eyes) > 2:
+        # Calculate area for each eye and sort by area (largest first)
+        eyes_with_area = [(eye, eye[2] * eye[3]) for eye in eyes]  # (x, y, w, h) -> area = w * h
+        eyes_with_area.sort(key=lambda x: x[1], reverse=True)  # Sort by area, descending
+        eyes = [eye for eye, _ in eyes_with_area[:2]]  # Keep only the two largest
+    
+    # Ensure we have at least 2 eyes, otherwise raise an error
+    elif len(eyes) < 2:
+        raise ValueError(f"Expected at least 2 eyes, but only {len(eyes)} eye(s) detected")
  
     index = 0
     color = (0, 255, 0)  # Green color for eye bounding boxes
@@ -99,6 +135,8 @@ def static_image_analysis_approach_2(
         
         cv2.rectangle(img,(eye_x, eye_y),(eye_x+eye_w, eye_y+eye_h), color, 2)
         index = index + 1
+    
+    display_intermediate_stage(img, "Post Eye Detection", wait_time=0)
 
     # Determine left eye vs. right eye
     if eye_1[0] < eye_2[0]:
@@ -126,7 +164,7 @@ def static_image_analysis_approach_2(
     cv2.line(img,right_eye_center, left_eye_center,(67,67,67),2)
 
     # ------ Determine direction of rotation ------
-    if left_eye_y < right_eye_y:
+    if left_eye_y > right_eye_y:
         point_3rd = (right_eye_x, left_eye_y)
         direction = -1 # rotate same direction to clock
         print("rotate to clock direction")
@@ -141,6 +179,7 @@ def static_image_analysis_approach_2(
     cv2.line(img,left_eye_center, point_3rd,(67,67,67),2)
     cv2.line(img,right_eye_center, point_3rd,(67,67,67),2)
 
+    display_intermediate_stage(img, "Eye Centers and Alignment Lines", wait_time=0)
 
     # Trigonometry to calculate angle    
     a = euclidean_distance(left_eye_center, point_3rd)
@@ -163,8 +202,7 @@ def static_image_analysis_approach_2(
     new_img = Image.fromarray(img_raw)
     new_img = np.array(new_img.rotate(direction * angle))
 
-    cv2.imshow('img', new_img)
-    cv2.waitKey(0)
+    display_intermediate_stage(new_img, "Final Rotated Image", wait_time=0)
     cv2.destroyAllWindows()
 
 
