@@ -12,7 +12,7 @@ class BiometricUnlock:
 
     def __init__(self, database_path: str):
         """
-        Args:
+        Inputs:
             database_path: Path to the on-device database storing
                            audio and image samples (and reference profiles)
                            for enrolled users.
