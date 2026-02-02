@@ -261,6 +261,8 @@ def facial_alignment_from_array(
         eyes_with_area.sort(key=lambda x: x[1], reverse=True)  # Sort by area, descending
         eyes = [eye for eye, _ in eyes_with_area[:2]]  # Keep only the two largest
     
+    # Verify that both of the detected eyes make sense to be eyes
+
     # Ensure we have at least 2 eyes, otherwise return None
     elif len(eyes) < 2:
         return None, None, None, None
