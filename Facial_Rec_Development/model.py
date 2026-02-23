@@ -14,44 +14,10 @@ from pathlib import Path
 import numpy as np
 from typing import Optional
 
-# Optional: use PIL + torchvision for image load/transform (no opencv required for base path)
-from PIL import Image
 import torchvision.transforms as T
 import torchvision.transforms.functional as TF
 
-
-class ImagePreprocessor:
-    """
-    Converts raw face images to fixed-size tensors.
-    Expects images that are already face crops, or full frames (will resize).
-    """
-
-    def __init__(
-        self,
-        image_size: int = 112,  # H and W (square)
-        normalize: bool = True  # ImageNet-style or [0,1]
-    ):
-        self.image_size = image_size
-        self.normalize = normalize
-        self._transform = T.Compose([
-            T.Resize((image_size, image_size)),
-            T.ToTensor(),
-        ])
-        # ImageNet mean/std if normalize
-        self._mean = (0.485, 0.456, 0.406)
-        self._std = (0.229, 0.224, 0.225)
-
-    def load_image(self, path: str) -> torch.Tensor:
-        """Load image file (supports jpg, png, etc.) as RGB tensor [1, 3, H, W]."""
-        img = Image.open(path).convert("RGB")
-        return self._transform(img).unsqueeze(0)  # [1, 3, H, W]
-
-    def __call__(self, image_path: str) -> torch.Tensor:
-        """Full preprocessing pipeline: load, resize, to tensor, optional normalize."""
-        x = self.load_image(image_path)
-        if self.normalize:
-            x = TF.normalize(x, self._mean, self._std)
-        return x  # Shape: [1, 3, image_size, image_size]
+from ImageProcessor import ImagePreprocessor
 
 
 class LightweightFaceNet(nn.Module):
