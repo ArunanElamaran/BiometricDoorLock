@@ -182,7 +182,7 @@ class FaceRecognitionSystem:
         learning_rate: float = 0.001,
         validation_split: float = 0.2
     ):
-        """Train the model on the dataset"""
+        """Train the model on the dataset using triplet loss on embeddings."""
 
         print("Loading dataset...")
         features, labels = self.prepare_dataset(data_dir)
@@ -207,7 +207,78 @@ class FaceRecognitionSystem:
             weight_decay=0.01
         )
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, epochs)
-        criterion = nn.CrossEntropyLoss()
+
+        triplet_criterion = nn.TripletMarginLoss(margin=0.5, p=2)
+
+        def generate_triplets(
+            embeddings: torch.Tensor,
+            labels: torch.Tensor,
+        ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor] | tuple[None, None, None]:
+            """
+            Simple online triplet mining within a batch.
+            For each anchor, pick one random positive (same label, different index)
+            and one random negative (different label).
+            """
+            anchors: list[torch.Tensor] = []
+            positives: list[torch.Tensor] = []
+            negatives: list[torch.Tensor] = []
+
+            num_samples = embeddings.size(0)
+            for i in range(num_samples):
+                anchor_label = labels[i]
+                pos_mask = labels == anchor_label
+                neg_mask = labels != anchor_label
+
+                pos_indices = torch.where(pos_mask)[0]
+                neg_indices = torch.where(neg_mask)[0]
+
+                # Need at least one other positive and one negative
+                if pos_indices.numel() <= 1 or neg_indices.numel() == 0:
+                    continue
+
+                # Exclude self from positives
+                pos_indices = pos_indices[pos_indices != i]
+                if pos_indices.numel() == 0:
+                    continue
+
+                pos_idx = pos_indices[torch.randint(pos_indices.numel(), (1,)).item()]
+                neg_idx = neg_indices[torch.randint(neg_indices.numel(), (1,)).item()]
+
+                anchors.append(embeddings[i])
+                positives.append(embeddings[pos_idx])
+                negatives.append(embeddings[neg_idx])
+
+            if not anchors:
+                return None, None, None
+
+            return (
+                torch.stack(anchors, dim=0),
+                torch.stack(positives, dim=0),
+                torch.stack(negatives, dim=0),
+            )
+
+        def compute_class_means(
+            feats: torch.Tensor,
+            lbls: torch.Tensor,
+        ) -> torch.Tensor:
+            """
+            Compute mean embedding per class from given features and labels.
+            Used for validation-time nearest-centroid accuracy.
+            """
+            self.model.eval()
+            with torch.no_grad():
+                emb = self.model.get_embedding(feats)
+
+            num_classes = self.model.num_persons
+            emb_dim = emb.size(1)
+            means = torch.zeros(num_classes, emb_dim, device=self.device)
+
+            for c in range(num_classes):
+                mask = lbls == c
+                if mask.any():
+                    means[c] = emb[mask].mean(dim=0)
+
+            return means
 
         # Data augmentation (random horizontal flip + small brightness/contrast)
         def augment(x: torch.Tensor) -> torch.Tensor:
@@ -221,13 +292,13 @@ class FaceRecognitionSystem:
                 x = x * brightness
             return x
 
-        best_val_acc = 0
+        best_val_acc = 0.0
         print("\nStarting training...")
 
         for epoch in range(epochs):
             self.model.train()
-            train_loss = 0
-            train_correct = 0
+            train_loss = 0.0
+            total_triplets = 0
 
             perm = torch.randperm(len(train_features))
             for i in range(0, len(train_features), batch_size):
@@ -237,23 +308,40 @@ class FaceRecognitionSystem:
                 batch_x = augment(batch_x)
 
                 optimizer.zero_grad()
-                logits = self.model(batch_x)
-                loss = criterion(logits, batch_y)
+                # Compute embeddings and construct triplets within the batch
+                embeddings = self.model.get_embedding(batch_x)
+                anchor, positive, negative = generate_triplets(embeddings, batch_y)
+
+                # If we cannot form any triplets from this batch, skip the step
+                if anchor is None:
+                    continue
+
+                loss = triplet_criterion(anchor, positive, negative)
                 loss.backward()
                 optimizer.step()
 
-                train_loss += loss.item() * len(batch_x)
-                train_correct += (logits.argmax(1) == batch_y).sum().item()
+                num_triplets = anchor.size(0)
+                train_loss += loss.item() * num_triplets
+                total_triplets += num_triplets
 
             scheduler.step()
-            train_loss /= len(train_features)
-            train_acc = train_correct / len(train_features)
+            if total_triplets > 0:
+                train_loss /= total_triplets
+            else:
+                train_loss = float("nan")
 
+            # Validation: nearest-centroid classification in embedding space
             self.model.eval()
             with torch.no_grad():
-                val_logits = self.model(val_features)
-                val_loss = criterion(val_logits, val_labels).item()
-                val_acc = (val_logits.argmax(1) == val_labels).float().mean().item()
+                class_means = compute_class_means(train_features, train_labels)
+                val_emb = self.model.get_embedding(val_features)
+
+                # Cosine similarity between validation embeddings and class means
+                class_means_norm = F.normalize(class_means, dim=1)
+                val_emb_norm = F.normalize(val_emb, dim=1)
+                sims = val_emb_norm @ class_means_norm.t()  # [N_val, num_persons]
+                val_pred = sims.argmax(dim=1)
+                val_acc = (val_pred == val_labels).float().mean().item()
 
             if val_acc > best_val_acc:
                 best_val_acc = val_acc
@@ -262,8 +350,8 @@ class FaceRecognitionSystem:
             if (epoch + 1) % 10 == 0 or epoch == 0:
                 print(
                     f"Epoch {epoch+1:3d}: "
-                    f"Train Loss={train_loss:.4f}, Acc={train_acc:.2%} | "
-                    f"Val Loss={val_loss:.4f}, Acc={val_acc:.2%}"
+                    f"Triplet Loss={train_loss:.4f} | "
+                    f"Val Acc (nearest-centroid)={val_acc:.2%}"
                 )
 
         print(f"\nTraining complete! Best validation accuracy: {best_val_acc:.2%}")
