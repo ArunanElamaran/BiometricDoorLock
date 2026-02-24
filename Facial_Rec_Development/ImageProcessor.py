@@ -126,6 +126,14 @@ class ImagePreprocessor:
         else:
             left_eye, right_eye = eye_2, eye_1
 
+        # Reject if the two eye boxes overlap
+        lx1, ly1, lw, lh = left_eye[0], left_eye[1], left_eye[2], left_eye[3]
+        rx1, ry1, rw, rh = right_eye[0], right_eye[1], right_eye[2], right_eye[3]
+        overlap_x = max(0, min(lx1 + lw, rx1 + rw) - max(lx1, rx1))
+        overlap_y = max(0, min(ly1 + lh, ry1 + rh) - max(ly1, ry1))
+        if overlap_x > 0 and overlap_y > 0:
+            return None, None, None, None
+
         # ------ Left and right eye center ------
         left_eye_center = (
             int(left_eye[0] + (left_eye[2] / 2)),
@@ -150,6 +158,9 @@ class ImagePreprocessor:
         a = _euclidean_distance(left_eye_center, point_3rd)
         b = _euclidean_distance(right_eye_center, left_eye_center)
         c = _euclidean_distance(right_eye_center, point_3rd)
+        # Reject degenerate case: coincident eyes or point_3rd same as eye (would divide by zero)
+        if b < 1e-6 or c < 1e-6:
+            return None, None, None, None
         cos_a = (b * b + c * c - a * a) / (2 * b * c)
         angle = np.arccos(np.clip(cos_a, -1.0, 1.0))
         angle_deg = (angle * 180) / math.pi
@@ -301,6 +312,8 @@ class ImagePreprocessor:
             return
 
         previous_face_center = None
+        previous_left_eye_center = None
+        previous_right_eye_center = None
         stable_frame_count = 0
         try:
             while True:
@@ -315,20 +328,43 @@ class ImagePreprocessor:
                 if aligned_face is not None and face_bbox is not None:
                     face_x, face_y, face_w, face_h = face_bbox
                     current_face_center = (face_x + face_w / 2, face_y + face_h / 2)
+                    face_size_avg = (face_w + face_h) / 2
+                    threshold_distance = face_size_avg * position_threshold
+
+                    current_left_eye_center = (
+                        left_eye_abs[0] + left_eye_abs[2] / 2,
+                        left_eye_abs[1] + left_eye_abs[3] / 2,
+                    )
+                    current_right_eye_center = (
+                        right_eye_abs[0] + right_eye_abs[2] / 2,
+                        right_eye_abs[1] + right_eye_abs[3] / 2,
+                    )
 
                     if previous_face_center is not None:
                         center_distance = _euclidean_distance(
                             current_face_center, previous_face_center
                         )
-                        face_size_avg = (face_w + face_h) / 2
-                        threshold_distance = face_size_avg * position_threshold
-                        if center_distance <= threshold_distance:
+                        left_eye_distance = _euclidean_distance(
+                            current_left_eye_center, previous_left_eye_center
+                        )
+                        right_eye_distance = _euclidean_distance(
+                            current_right_eye_center, previous_right_eye_center
+                        )
+                        if (
+                            center_distance <= threshold_distance
+                            and left_eye_distance <= threshold_distance
+                            and right_eye_distance <= threshold_distance
+                        ):
                             stable_frame_count += 1
                         else:
                             stable_frame_count = 1
                             previous_face_center = current_face_center
+                            previous_left_eye_center = current_left_eye_center
+                            previous_right_eye_center = current_right_eye_center
                     else:
                         previous_face_center = current_face_center
+                        previous_left_eye_center = current_left_eye_center
+                        previous_right_eye_center = current_right_eye_center
                         stable_frame_count = 1
 
                     yield frame, aligned_face, face_bbox, left_eye_abs, right_eye_abs, stable_frame_count
@@ -337,6 +373,8 @@ class ImagePreprocessor:
                 else:
                     stable_frame_count = 0
                     previous_face_center = None
+                    previous_left_eye_center = None
+                    previous_right_eye_center = None
                     yield frame, None, None, None, None, 0
         finally:
             cap.release()
