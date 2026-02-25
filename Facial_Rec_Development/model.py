@@ -1,7 +1,7 @@
 """
-Lightweight Face Recognition Model
-Target: < 1GB RAM, 5 identities
-Architecture: Fixed-size face image + small CNN
+Face Recognition Model
+VGG-style CNN for face / identity classification and embedding.
+Expects input size 224x224; use ImagePreprocessor with image_size=224.
 
 Requirements:
     pip install torch torchvision numpy
@@ -20,81 +20,73 @@ import torchvision.transforms.functional as TF
 from ImageProcessor import ImagePreprocessor
 
 
+def _make_conv_block(in_c: int, out_c: int, num_convs: int) -> nn.Sequential:
+    layers = []
+    for i in range(num_convs):
+        layers += [
+            nn.ZeroPad2d(1),
+            nn.Conv2d(in_c if i == 0 else out_c, out_c, kernel_size=3),
+            nn.ReLU(inplace=True),
+        ]
+    layers.append(nn.MaxPool2d(2, stride=2))
+    return nn.Sequential(*layers)
+
+
 class LightweightFaceNet(nn.Module):
     """
-    Small CNN for face / identity classification.
-
-    Architecture designed for:
-    - Small model size, low inference memory
-    - 5 (or N) identity classification
-
-    Input: [batch, 3, image_size, image_size]
+    VGG-style face network (input 224x224).
+    Same interface as before: num_persons, embedding_dim, forward(), get_embedding().
     """
 
     def __init__(
         self,
-        image_size: int = 112,
+        image_size: int = 224,
         num_persons: int = 5,
-        embedding_dim: int = 64
+        embedding_dim: int = 128,
     ):
         super().__init__()
         self.num_persons = num_persons
         self.embedding_dim = embedding_dim
 
-        # Convolutional feature extractor
-        # Input: [batch, 3, 112, 112]
-        self.conv_layers = nn.Sequential(
-            # Block 1: [3, 112, 112] -> [16, 56, 56]
-            nn.Conv2d(3, 16, kernel_size=3, stride=1, padding=1),
-            nn.BatchNorm2d(16),
-            nn.ReLU(),
-            nn.MaxPool2d(kernel_size=2, stride=2),
-            nn.Dropout2d(0.1),
-
-            # Block 2: [16, 56, 56] -> [32, 28, 28]
-            nn.Conv2d(16, 32, kernel_size=3, stride=1, padding=1),
-            nn.BatchNorm2d(32),
-            nn.ReLU(),
-            nn.MaxPool2d(kernel_size=2, stride=2),
-            nn.Dropout2d(0.1),
-
-            # Block 3: [32, 28, 28] -> [64, 14, 14]
-            nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
-            nn.BatchNorm2d(64),
-            nn.ReLU(),
-            nn.MaxPool2d(kernel_size=2, stride=2),
-            nn.Dropout2d(0.1),
-
-            # Block 4: [64, 14, 14] -> [64, 7, 7]
-            nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1),
-            nn.BatchNorm2d(64),
-            nn.ReLU(),
-            nn.MaxPool2d(kernel_size=2, stride=2),
-            nn.Dropout2d(0.2),
+        # VGG-style backbone: 224 -> 112 -> 56 -> 28 -> 14 -> 7
+        self.conv_blocks = nn.Sequential(
+            _make_conv_block(3, 64, 2),    # 224 -> 112
+            _make_conv_block(64, 128, 2),  # 112 -> 56
+            _make_conv_block(128, 256, 3), # 56 -> 28
+            _make_conv_block(256, 512, 3), # 28 -> 14
+            _make_conv_block(512, 512, 3), # 14 -> 7
         )
 
-        self.global_pool = nn.AdaptiveAvgPool2d((1, 1))
-        self.embedding = nn.Sequential(
-            nn.Linear(64, embedding_dim),
-            nn.ReLU(),
-            nn.Dropout(0.3)
+        # Head: 7x7x512 -> 4096 -> 4096 -> embed -> num_persons
+        self.head = nn.Sequential(
+            nn.Conv2d(512, 4096, kernel_size=7),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.5),
+            nn.Conv2d(4096, 4096, kernel_size=1),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.5),
+        )
+        self.embedding_proj = nn.Sequential(
+            nn.Linear(4096, embedding_dim),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.5),
         )
         self.classifier = nn.Linear(embedding_dim, num_persons)
 
     def forward(self, x: torch.Tensor, return_embedding: bool = False):
         """
         Args:
-            x: Face image [batch, 3, image_size, image_size]
+            x: Face image [batch, 3, 224, 224]
             return_embedding: If True, also return the embedding vector
 
         Returns:
             logits: [batch, num_persons]
             embedding (optional): [batch, embedding_dim]
         """
-        features = self.conv_layers(x)
-        pooled = self.global_pool(features)
-        pooled = pooled.view(pooled.size(0), -1)
-        emb = self.embedding(pooled)
+        features = self.conv_blocks(x)       # [B, 512, 7, 7]
+        head_out = self.head(features)      # [B, 4096, 1, 1]
+        head_flat = head_out.view(head_out.size(0), -1)
+        emb = self.embedding_proj(head_flat)
         logits = self.classifier(emb)
         if return_embedding:
             return logits, emb
@@ -115,7 +107,7 @@ class FaceRecognitionSystem:
     def __init__(
         self,
         num_persons: int = 5,
-        image_size: int = 112,
+        image_size: int = 224,
         device: Optional[str] = None
     ):
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
@@ -420,6 +412,7 @@ class FaceRecognitionSystem:
                 "model_state": self.model.state_dict(),
                 "person_names": self.person_names,
                 "num_persons": self.model.num_persons,
+                "image_size": self.preprocessor.image_size,
             },
             path,
         )
@@ -430,18 +423,26 @@ class FaceRecognitionSystem:
         checkpoint = torch.load(path, map_location=self.device)
         self.model.load_state_dict(checkpoint["model_state"])
         self.person_names = checkpoint["person_names"]
+        if "image_size" in checkpoint:
+            self.preprocessor.image_size = checkpoint["image_size"]
+            self.preprocessor._transform = T.Compose([
+                T.Resize((self.preprocessor.image_size, self.preprocessor.image_size)),
+                T.ToTensor(),
+            ])
         print(f"Model loaded from {path}")
 
     def memory_usage(self) -> dict:
         """Estimate memory usage"""
         param_size = sum(p.numel() * p.element_size() for p in self.model.parameters())
         buffer_size = sum(b.numel() * b.element_size() for b in self.model.buffers())
+        total = param_size + buffer_size
+        total_mb = total / (1024 * 1024)
 
         return {
-            "model_params": f"{param_size / 1024:.1f} KB",
-            "model_buffers": f"{buffer_size / 1024:.1f} KB",
-            "total_model": f"{(param_size + buffer_size) / 1024:.1f} KB",
-            "estimated_inference_ram": "~50-100 MB",
+            "model_params": f"{param_size / (1024*1024):.1f} MB" if param_size >= 1024*1024 else f"{param_size / 1024:.1f} KB",
+            "model_buffers": f"{buffer_size / (1024*1024):.1f} MB" if buffer_size >= 1024*1024 else f"{buffer_size / 1024:.1f} KB",
+            "total_model": f"{total_mb:.1f} MB" if total >= 1024*1024 else f"{total / 1024:.1f} KB",
+            "estimated_inference_ram": "~1-2 GB" if total_mb > 100 else "~50-100 MB",
         }
 
 
@@ -449,13 +450,15 @@ def print_model_info(model: LightweightFaceNet):
     """Print model architecture summary"""
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    size_mb = total_params * 4 / (1024 * 1024)
+    size_str = f"{size_mb:.1f} MB" if size_mb >= 1 else f"{total_params * 4 / 1024:.1f} KB"
 
     print("\n" + "=" * 50)
     print("Model Summary")
     print("=" * 50)
     print(f"Total parameters: {total_params:,}")
     print(f"Trainable parameters: {trainable_params:,}")
-    print(f"Model size: ~{total_params * 4 / 1024:.1f} KB (float32)")
+    print(f"Model size: ~{size_str} (float32)")
     print("=" * 50)
 
 

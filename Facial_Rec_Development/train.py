@@ -13,7 +13,7 @@ DATA_DIR = "data"  # Folder containing person subfolders (each with face images)
 OUTPUT_MODEL = "face_model.pt"  # Where to save the trained model
 NUM_PERSONS = 5
 EPOCHS = 50
-BATCH_SIZE = 16
+BATCH_SIZE = 8  # VGG-style model is large; reduce (e.g. to 4) if OOM during training
 LEARNING_RATE = 0.001
 VALIDATION_SPLIT = 0.2
 
