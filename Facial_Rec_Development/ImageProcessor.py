@@ -36,9 +36,11 @@ class ImagePreprocessor:
         normalize: bool = True,
         face_cascade_path: Optional[str] = None,
         eye_cascade_path: Optional[str] = None,
+        face_box_expand: float = 0.2,  # Expand face box on all sides
     ):
         self.image_size = image_size
         self.normalize = normalize
+        self.face_box_expand = face_box_expand
         self._transform = T.Compose([
             T.Resize((image_size, image_size)),
             T.ToTensor(),
@@ -96,8 +98,23 @@ class ImagePreprocessor:
         if len(faces) == 0:
             return None, None, None, None
 
-        # ------ Face bounding box ------
+        img_height, img_width = img.shape[:2]
+
+        # ------ Face bounding box (expand equally on all four edges) ------
         face_x, face_y, face_w, face_h = faces[0]
+        expand_w = face_w * self.face_box_expand
+        expand_h = face_h * self.face_box_expand
+        face_x = int(face_x - expand_w)
+        face_y = int(face_y - expand_h)
+        face_w = int(face_w + 2 * expand_w)
+        face_h = int(face_h + 2 * expand_h)
+        # Clamp to image bounds
+        face_x = max(0, face_x)
+        face_y = max(0, face_y)
+        if face_x + face_w > img_width:
+            face_w = img_width - face_x
+        if face_y + face_h > img_height:
+            face_h = img_height - face_y
         face_bbox = (face_x, face_y, face_w, face_h)
 
         # ------ Face region ------
@@ -190,9 +207,7 @@ class ImagePreprocessor:
         pad_w = int(pad_w * 1.1)
         pad_h = int(pad_h * 1.1)
 
-        # Expand the bounding box with bounds checking
-        img_height, img_width = img.shape[:2]
-
+        # Expand the bounding box with bounds checking (for rotation padding)
         # Calculate expanded region coordinates
         expanded_x = max(0, face_x - pad_w)
         expanded_y = max(0, face_y - pad_h)
@@ -249,20 +264,23 @@ class ImagePreprocessor:
             x = TF.normalize(x, self._mean, self._std)
         return x
 
-    def __call__(self, image_path: str) -> torch.Tensor:
+    def __call__(self, image_path: str, align: bool = True) -> torch.Tensor:
         """
-        Full pipeline from path: open image -> facial alignment -> resize, to tensor, normalize.
-        Raises ValueError if alignment fails (no face or fewer than two eyes detected).
+        Full pipeline from path: open image -> [optional alignment] -> resize, to tensor, normalize.
+        If align=True: run facial alignment first; raises ValueError if alignment fails.
+        If align=False: skip alignment and resize the full image (e.g. for training on pre-cropped faces).
         """
         img_bgr = cv2.imread(image_path)
         if img_bgr is None:
             raise FileNotFoundError(f"Could not load image: {image_path}")
-        aligned, _, _, _ = self.facial_alignment_from_array(img_bgr)
-        if aligned is None:
-            raise ValueError(
-                f"Face alignment failed for {image_path}: no face or fewer than two eyes detected."
-            )
-        return self._array_to_tensor(aligned)
+        if align:
+            aligned, _, _, _ = self.facial_alignment_from_array(img_bgr)
+            if aligned is None:
+                raise ValueError(
+                    f"Face alignment failed for {image_path}: no face or fewer than two eyes detected."
+                )
+            return self._array_to_tensor(aligned)
+        return self._array_to_tensor(img_bgr)
 
     def preprocess_from_array(
         self,
