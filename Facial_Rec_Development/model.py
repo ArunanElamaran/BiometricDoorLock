@@ -14,10 +14,32 @@ from pathlib import Path
 import numpy as np
 from typing import Optional
 
+import cv2
 import torchvision.transforms as T
 import torchvision.transforms.functional as TF
+from torch.utils.data import Dataset, DataLoader
 
-from ImageProcessor import ImagePreprocessor
+try:
+    from .ImageProcessor import ImagePreprocessor
+except ImportError:  # Fallback for running as a standalone script
+    from ImageProcessor import ImagePreprocessor
+
+
+class _FaceDataset(Dataset):
+    """Loads face images from paths on demand to avoid loading the full dataset into memory."""
+
+    def __init__(self, paths: list[str], labels: list[int], preprocessor: ImagePreprocessor, align: bool = False):
+        self.paths = paths
+        self.labels = labels
+        self.preprocessor = preprocessor
+        self.align = align
+
+    def __len__(self) -> int:
+        return len(self.paths)
+
+    def __getitem__(self, i: int) -> tuple[torch.Tensor, int]:
+        x = self.preprocessor(self.paths[i], align=self.align)
+        return x.squeeze(0), self.labels[i]
 
 
 def _make_conv_block(in_c: int, out_c: int, num_convs: int) -> nn.Sequential:
@@ -48,26 +70,19 @@ class LightweightFaceNet(nn.Module):
         self.num_persons = num_persons
         self.embedding_dim = embedding_dim
 
-        # VGG-style backbone: 224 -> 112 -> 56 -> 28 -> 14 -> 7
+        # Lightweight VGG-style backbone:
+        # 224 -> 112 -> 56 -> 28 -> 14 -> 7 with fewer channels
         self.conv_blocks = nn.Sequential(
-            _make_conv_block(3, 64, 2),    # 224 -> 112
-            _make_conv_block(64, 128, 2),  # 112 -> 56
-            _make_conv_block(128, 256, 3), # 56 -> 28
-            _make_conv_block(256, 512, 3), # 28 -> 14
-            _make_conv_block(512, 512, 3), # 14 -> 7
+            _make_conv_block(3, 32, 2),     # 224 -> 112
+            _make_conv_block(32, 64, 2),    # 112 -> 56
+            _make_conv_block(64, 128, 2),   # 56 -> 28
+            _make_conv_block(128, 256, 2),  # 28 -> 14 -> 7
         )
 
-        # Head: 7x7x512 -> 4096 -> 4096 -> embed -> num_persons
-        self.head = nn.Sequential(
-            nn.Conv2d(512, 4096, kernel_size=7),
-            nn.ReLU(inplace=True),
-            nn.Dropout(0.5),
-            nn.Conv2d(4096, 4096, kernel_size=1),
-            nn.ReLU(inplace=True),
-            nn.Dropout(0.5),
-        )
+        # Global pooling + small MLP head: 7x7x256 -> 256 -> embedding -> classifier
+        self.global_pool = nn.AdaptiveAvgPool2d((1, 1))
         self.embedding_proj = nn.Sequential(
-            nn.Linear(4096, embedding_dim),
+            nn.Linear(256, embedding_dim),
             nn.ReLU(inplace=True),
             nn.Dropout(0.5),
         )
@@ -83,10 +98,10 @@ class LightweightFaceNet(nn.Module):
             logits: [batch, num_persons]
             embedding (optional): [batch, embedding_dim]
         """
-        features = self.conv_blocks(x)       # [B, 512, 7, 7]
-        head_out = self.head(features)      # [B, 4096, 1, 1]
-        head_flat = head_out.view(head_out.size(0), -1)
-        emb = self.embedding_proj(head_flat)
+        features = self.conv_blocks(x)              # [B, 256, 7, 7]
+        pooled = self.global_pool(features)         # [B, 256, 1, 1]
+        flat = pooled.view(pooled.size(0), -1)      # [B, 256]
+        emb = self.embedding_proj(flat)             # [B, embedding_dim]
         logits = self.classifier(emb)
         if return_embedding:
             return logits, emb
@@ -117,54 +132,135 @@ class FaceRecognitionSystem:
             num_persons=num_persons
         ).to(self.device)
         self.person_names: list[str] = []
+        # Single on-device database located at <this_folder>/database
+        # Cached embeddings: {person_name: embedding}
+        self._database_dir = Path(__file__).resolve().parent / "database"
+        self._database_embeddings: Optional[dict[str, np.ndarray]] = None
 
-    def prepare_dataset(self, data_dir: str) -> tuple[torch.Tensor, torch.Tensor]:
-        """
-        Load dataset from directory structure:
+    def _show_failed_image_and_wait(self, image_path: str, error_msg: str) -> None:
+        """Display the image that failed to load and block until Escape is pressed."""
+        img = cv2.imread(image_path)
+        if img is None:
+            print(f"    (Could not read image for display: {image_path})")
+            return
+        # Resize if very large so it fits on screen
+        h, w = img.shape[:2]
+        max_side = 800
+        if max(h, w) > max_side:
+            scale = max_side / max(h, w)
+            img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+        cv2.putText(
+            img, "Press ESC to continue", (10, 30),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2
+        )
+        cv2.imshow("Load failed - press ESC", img)
+        print(f"    Failed: {image_path}")
+        print(f"    Error: {error_msg}")
+        while True:
+            if cv2.waitKey(100) == 27:  # Escape
+                break
+        cv2.destroyAllWindows()
 
-        data_dir/
-            person_name/
-                img1.jpg
-                img2.jpg
-                ...
-            another_person/
-                ...
-
-        Returns:
-            features: [N, 3, image_size, image_size]
-            labels: [N]
-        """
-        data_path = Path(data_dir)
-        features = []
-        labels = []
-
-        person_dirs = sorted([d for d in data_path.iterdir() if d.is_dir()])
-        self.person_names = [d.name for d in person_dirs]
-
-        print(f"Found {len(person_dirs)} persons: {self.person_names}")
-
+    def _load_split(
+        self,
+        split_path: Path,
+        person_names: list[str],
+        debug_failures: bool = False,
+    ) -> tuple[list[str], list[int]]:
+        """Collect (path, label) for one split. If debug_failures=True, validate by loading and show failures; else just collect paths."""
+        paths: list[str] = []
+        labels: list[int] = []
+        name_to_idx = {name: i for i, name in enumerate(person_names)}
         image_extensions = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 
-        for person_idx, person_dir in enumerate(person_dirs):
+        total = 0
+        for idx, person_name in enumerate(person_names):
+            person_dir = split_path / person_name
+            if not person_dir.is_dir():
+                continue
             image_files = [
                 f for f in person_dir.iterdir()
                 if f.is_file() and f.suffix.lower() in image_extensions
             ]
             image_files = sorted(image_files)
-            print(f"  {person_dir.name}: {len(image_files)} samples")
-
             for image_file in image_files:
-                try:
-                    img_tensor = self.preprocessor(str(image_file))
-                    features.append(img_tensor)
-                    labels.append(person_idx)
-                except Exception as e:
-                    print(f"    Warning: Failed to load {image_file.name}: {e}")
+                path = str(image_file)
+                if debug_failures:
+                    try:
+                        self.preprocessor(path, align=False)
+                        paths.append(path)
+                        labels.append(name_to_idx[person_name])
+                        total += 1
+                    except Exception as e:
+                        print(f"    Warning: Failed to load {image_file.name}: {e}")
+                        self._show_failed_image_and_wait(path, str(e))
+                else:
+                    paths.append(path)
+                    labels.append(name_to_idx[person_name])
+                    total += 1
+            if (idx + 1) % 50 == 0:
+                print(f"  ... {total} images from {idx + 1} persons")
 
-        features = torch.cat(features, dim=0)
-        labels = torch.tensor(labels, dtype=torch.long)
+        return paths, labels
 
-        return features, labels
+    def load_train_val_splits(
+        self,
+        data_dir: str,
+        debug_failures: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Load dataset from pre-split directory structure:
+
+        data_dir/
+            train/
+                person_name/
+                    img1.jpg
+                    ...
+                another_person/
+                    ...
+            val/
+                person_name/
+                    ...
+                another_person/
+                    ...
+
+        Person names and label order are taken from the union of data_dir/train/ and
+        data_dir/val/ subdirs, so both splits can contain different identity sets.
+
+        Returns:
+            train_paths, train_labels, val_paths, val_labels
+        """
+        data_path = Path(data_dir)
+        train_path = data_path / "train"
+        val_path = data_path / "val"
+
+        if not train_path.is_dir():
+            raise FileNotFoundError(f"Expected training split at {train_path}")
+        if not val_path.is_dir():
+            raise FileNotFoundError(f"Expected validation split at {val_path}")
+
+        train_person_names = {d.name for d in train_path.iterdir() if d.is_dir()}
+        val_person_names = {d.name for d in val_path.iterdir() if d.is_dir()}
+        self.person_names = sorted(train_person_names | val_person_names)
+        n_persons = len(self.person_names)
+
+        if n_persons != self.model.num_persons:
+            raise ValueError(
+                f"data/train has {n_persons} persons but model was created with "
+                f"num_persons={self.model.num_persons}. Use FaceRecognitionSystem(num_persons={n_persons})."
+            )
+
+        print(f"Found {n_persons} persons: {self.person_names[:5]}{'...' if n_persons > 5 else ''}")
+
+        print("Loading train split (paths only, no preload)...")
+        train_paths, train_labels = self._load_split(train_path, self.person_names, debug_failures)
+        print(f"  Train: {len(train_paths)} samples")
+
+        print("Loading val split (paths only, no preload)...")
+        val_paths, val_labels = self._load_split(val_path, self.person_names, debug_failures)
+        print(f"  Val: {len(val_paths)} samples")
+
+        return train_paths, train_labels, val_paths, val_labels
 
     def train(
         self,
@@ -172,26 +268,39 @@ class FaceRecognitionSystem:
         epochs: int = 50,
         batch_size: int = 8,
         learning_rate: float = 0.001,
-        validation_split: float = 0.2
+        debug_failures: bool = False,
+        num_workers: int = 0,
     ):
-        """Train the model on the dataset using triplet loss on embeddings."""
+        """Train the model on the dataset using cross-entropy classification
+        (same strategy as the voice model). Expects data_dir with train/ and
+        val/ subdirs. Images are loaded on demand (streaming) to avoid OOM.
+        If debug_failures=True, each failed image is shown during the
+        path-collection phase; press ESC to continue."""
+        print("Loading dataset (path lists only)...")
+        train_paths, train_labels, val_paths, val_labels = self.load_train_val_splits(
+            data_dir, debug_failures=debug_failures
+        )
 
-        print("Loading dataset...")
-        features, labels = self.prepare_dataset(data_dir)
+        train_dataset = _FaceDataset(train_paths, train_labels, self.preprocessor, align=False)
+        val_dataset = _FaceDataset(val_paths, val_labels, self.preprocessor, align=False)
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=num_workers,
+            pin_memory=(self.device == "cuda"),
+        )
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+            pin_memory=(self.device == "cuda"),
+        )
 
-        n_samples = len(features)
-        indices = torch.randperm(n_samples)
-        n_val = int(n_samples * validation_split)
-
-        val_indices = indices[:n_val]
-        train_indices = indices[n_val:]
-
-        train_features = features[train_indices].to(self.device)
-        train_labels = labels[train_indices].to(self.device)
-        val_features = features[val_indices].to(self.device)
-        val_labels = labels[val_indices].to(self.device)
-
-        print(f"Training samples: {len(train_features)}, Validation: {len(val_features)}")
+        print(f"Training samples: {len(train_paths)}, Validation: {len(val_paths)}")
+        if len(val_paths) == 0:
+            print("Warning: No validation samples (data/val/ empty or missing). Training will run but no val accuracy or best-model checkpoint.")
 
         optimizer = torch.optim.AdamW(
             self.model.parameters(),
@@ -200,77 +309,7 @@ class FaceRecognitionSystem:
         )
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, epochs)
 
-        triplet_criterion = nn.TripletMarginLoss(margin=0.5, p=2)
-
-        def generate_triplets(
-            embeddings: torch.Tensor,
-            labels: torch.Tensor,
-        ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor] | tuple[None, None, None]:
-            """
-            Simple online triplet mining within a batch.
-            For each anchor, pick one random positive (same label, different index)
-            and one random negative (different label).
-            """
-            anchors: list[torch.Tensor] = []
-            positives: list[torch.Tensor] = []
-            negatives: list[torch.Tensor] = []
-
-            num_samples = embeddings.size(0)
-            for i in range(num_samples):
-                anchor_label = labels[i]
-                pos_mask = labels == anchor_label
-                neg_mask = labels != anchor_label
-
-                pos_indices = torch.where(pos_mask)[0]
-                neg_indices = torch.where(neg_mask)[0]
-
-                # Need at least one other positive and one negative
-                if pos_indices.numel() <= 1 or neg_indices.numel() == 0:
-                    continue
-
-                # Exclude self from positives
-                pos_indices = pos_indices[pos_indices != i]
-                if pos_indices.numel() == 0:
-                    continue
-
-                pos_idx = pos_indices[torch.randint(pos_indices.numel(), (1,)).item()]
-                neg_idx = neg_indices[torch.randint(neg_indices.numel(), (1,)).item()]
-
-                anchors.append(embeddings[i])
-                positives.append(embeddings[pos_idx])
-                negatives.append(embeddings[neg_idx])
-
-            if not anchors:
-                return None, None, None
-
-            return (
-                torch.stack(anchors, dim=0),
-                torch.stack(positives, dim=0),
-                torch.stack(negatives, dim=0),
-            )
-
-        def compute_class_means(
-            feats: torch.Tensor,
-            lbls: torch.Tensor,
-        ) -> torch.Tensor:
-            """
-            Compute mean embedding per class from given features and labels.
-            Used for validation-time nearest-centroid accuracy.
-            """
-            self.model.eval()
-            with torch.no_grad():
-                emb = self.model.get_embedding(feats)
-
-            num_classes = self.model.num_persons
-            emb_dim = emb.size(1)
-            means = torch.zeros(num_classes, emb_dim, device=self.device)
-
-            for c in range(num_classes):
-                mask = lbls == c
-                if mask.any():
-                    means[c] = emb[mask].mean(dim=0)
-
-            return means
+        criterion = nn.CrossEntropyLoss()
 
         # Data augmentation (random horizontal flip + small brightness/contrast)
         def augment(x: torch.Tensor) -> torch.Tensor:
@@ -285,69 +324,84 @@ class FaceRecognitionSystem:
             return x
 
         best_val_acc = 0.0
-        print("\nStarting training...")
+        print("\nStarting training (streaming batches, cross-entropy classification)...")
 
         for epoch in range(epochs):
             self.model.train()
             train_loss = 0.0
-            total_triplets = 0
+            train_correct = 0
+            total_train_samples = 0
 
-            perm = torch.randperm(len(train_features))
-            for i in range(0, len(train_features), batch_size):
-                batch_idx = perm[i : i + batch_size]
-                batch_x = train_features[batch_idx]
-                batch_y = train_labels[batch_idx]
+            for batch_x, batch_y in train_loader:
+                batch_x = batch_x.to(self.device)
+                batch_y = batch_y.to(self.device)
                 batch_x = augment(batch_x)
 
                 optimizer.zero_grad()
-                # Compute embeddings and construct triplets within the batch
-                embeddings = self.model.get_embedding(batch_x)
-                anchor, positive, negative = generate_triplets(embeddings, batch_y)
-
-                # If we cannot form any triplets from this batch, skip the step
-                if anchor is None:
-                    continue
-
-                loss = triplet_criterion(anchor, positive, negative)
+                logits = self.model(batch_x)
+                loss = criterion(logits, batch_y)
                 loss.backward()
                 optimizer.step()
 
-                num_triplets = anchor.size(0)
-                train_loss += loss.item() * num_triplets
-                total_triplets += num_triplets
+                batch_size_actual = batch_y.size(0)
+                train_loss += loss.item() * batch_size_actual
+                train_correct += (logits.argmax(1) == batch_y).sum().item()
+                total_train_samples += batch_size_actual
 
             scheduler.step()
-            if total_triplets > 0:
-                train_loss /= total_triplets
+            if total_train_samples > 0:
+                train_loss /= total_train_samples
+                train_acc = train_correct / total_train_samples
             else:
                 train_loss = float("nan")
+                train_acc = float("nan")
 
-            # Validation: nearest-centroid classification in embedding space
-            self.model.eval()
-            with torch.no_grad():
-                class_means = compute_class_means(train_features, train_labels)
-                val_emb = self.model.get_embedding(val_features)
+            # Validation: standard classification accuracy on val_loader
+            val_acc = 0.0
+            val_loss = float("nan")
+            if len(val_paths) > 0:
+                self.model.eval()
+                with torch.no_grad():
+                    val_loss_total = 0.0
+                    val_correct = 0
+                    total_val_samples = 0
+                    for batch_x, batch_y in val_loader:
+                        batch_x = batch_x.to(self.device)
+                        batch_y = batch_y.to(self.device)
+                        logits = self.model(batch_x)
+                        loss = criterion(logits, batch_y)
+                        batch_size_actual = batch_y.size(0)
+                        val_loss_total += loss.item() * batch_size_actual
+                        val_correct += (logits.argmax(1) == batch_y).sum().item()
+                        total_val_samples += batch_size_actual
 
-                # Cosine similarity between validation embeddings and class means
-                class_means_norm = F.normalize(class_means, dim=1)
-                val_emb_norm = F.normalize(val_emb, dim=1)
-                sims = val_emb_norm @ class_means_norm.t()  # [N_val, num_persons]
-                val_pred = sims.argmax(dim=1)
-                val_acc = (val_pred == val_labels).float().mean().item()
+                    if total_val_samples > 0:
+                        val_loss = val_loss_total / total_val_samples
+                        val_acc = val_correct / total_val_samples
 
-            if val_acc > best_val_acc:
+            if len(val_paths) > 0 and val_acc > best_val_acc:
                 best_val_acc = val_acc
                 self.save("best_model.pt")
 
-            if (epoch + 1) % 10 == 0 or epoch == 0:
+            if len(val_paths) > 0:
                 print(
                     f"Epoch {epoch+1:3d}: "
-                    f"Triplet Loss={train_loss:.4f} | "
-                    f"Val Acc (nearest-centroid)={val_acc:.2%}"
+                    f"Train Loss={train_loss:.4f}, Acc={train_acc:.2%} | "
+                    f"Val Loss={val_loss:.4f}, Acc={val_acc:.2%}"
+                )
+            else:
+                print(
+                    f"Epoch {epoch+1:3d}: "
+                    f"Train Loss={train_loss:.4f}, Acc={train_acc:.2%} | "
+                    "Val: N/A (no val data)"
                 )
 
-        print(f"\nTraining complete! Best validation accuracy: {best_val_acc:.2%}")
-        self.load("best_model.pt")
+        print(
+            "\nTraining complete!"
+            + (f" Best validation accuracy: {best_val_acc:.2%}" if len(val_paths) > 0 else " (no validation set)")
+        )
+        if len(val_paths) > 0:
+            self.load("best_model.pt")
 
     def predict(self, image_path: str) -> tuple[str, float, dict]:
         """
@@ -386,24 +440,122 @@ class FaceRecognitionSystem:
 
         return embedding.cpu().numpy().squeeze()
 
-    def verify_face(
-        self,
-        image_path: str,
-        reference_embedding: np.ndarray,
-        threshold: float = 0.7
-    ) -> tuple[bool, float]:
+    def get_face_embedding_from_array(self, img_bgr: np.ndarray) -> np.ndarray:
         """
-        Verify if image matches a reference face embedding.
+        Extract face embedding from a BGR numpy array (e.g. camera frame or
+        the output of ImagePreprocessor.capture_aligned_face_from_camera).
+        """
+        self.model.eval()
+
+        with torch.no_grad():
+            # capture_aligned_face_from_camera already returns an aligned face crop,
+            # so we just convert the BGR array to a normalized tensor.
+            img_tensor = self.preprocessor._array_to_tensor(img_bgr).to(self.device)
+            embedding = self.model.get_embedding(img_tensor)
+
+        return embedding.cpu().numpy().squeeze()
+
+    # ------------------------------------------------------------------
+    # Database-based identification API
+    # ------------------------------------------------------------------
+    def _build_database_embeddings(self, database_dir: str) -> dict[str, np.ndarray]:
+        """
+        Scan a database directory laid out as:
+
+            database/
+                person1/
+                    img1.jpg
+                    img2.jpg
+                    ...
+                person2/
+                    ...
+
+        and compute a single reference embedding per person (mean over that
+        person's images). Returns a mapping person_name -> embedding (np.ndarray).
+        """
+        db_path = Path(database_dir)
+        if not db_path.is_dir():
+            raise FileNotFoundError(f"Database directory not found: {db_path}")
+
+        image_extensions = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+        person_to_embeddings: dict[str, list[np.ndarray]] = {}
+
+        for person_dir in sorted(p for p in db_path.iterdir() if p.is_dir()):
+            person_name = person_dir.name
+            image_files = [
+                f for f in person_dir.iterdir()
+                if f.is_file() and f.suffix.lower() in image_extensions
+            ]
+            if not image_files:
+                continue
+
+            embeddings: list[np.ndarray] = []
+            for img_path in image_files:
+                try:
+                    emb = self.get_face_embedding(str(img_path))
+                    embeddings.append(emb)
+                except Exception as e:
+                    print(f"Warning: failed to compute embedding for {img_path}: {e}")
+
+            if embeddings:
+                # Mean embedding for this person
+                person_to_embeddings[person_name] = np.mean(
+                    np.stack(embeddings, axis=0), axis=0
+                )
+
+        if not person_to_embeddings:
+            raise ValueError(
+                f"No valid face images found in database directory: {db_path}"
+            )
+
+        return person_to_embeddings
+
+    def __call__(
+        self,
+        aligned_face_bgr: np.ndarray,
+        threshold: float = 0.7,
+    ) -> Optional[str]:
+        """
+        Run the model on an already aligned face image (BGR numpy array),
+        compare its embedding against a database of stored embeddings, and
+        return the most likely person or None.
+
+        This is designed to be called with the output of
+        ImagePreprocessor.capture_aligned_face_from_camera.
+
+        Args:
+            aligned_face_bgr: Aligned face crop as a BGR numpy array.
+            threshold: Minimum cosine similarity required to accept a match.
 
         Returns:
-            is_match: True if similarity > threshold
-            similarity: Cosine similarity score
+            The person name (directory name under the fixed database directory)
+            that best matches the query image, or None if no person is within
+            the similarity margin.
         """
-        test_embedding = self.get_face_embedding(image_path)
-        similarity = np.dot(test_embedding, reference_embedding) / (
-            np.linalg.norm(test_embedding) * np.linalg.norm(reference_embedding)
-        )
-        return similarity > threshold, float(similarity)
+        # Lazily build and cache embeddings for the single, fixed database
+        if self._database_embeddings is None:
+            self._database_embeddings = self._build_database_embeddings(str(self._database_dir))
+
+        db_embeddings = self._database_embeddings
+
+        # Compute normalized query embedding from the aligned BGR image
+        query_emb = self.get_face_embedding_from_array(aligned_face_bgr)
+        query_norm = query_emb / (np.linalg.norm(query_emb) + 1e-8)
+
+        best_person: Optional[str] = None
+        best_sim: float = -1.0
+
+        for person_name, ref_emb in db_embeddings.items():
+            ref_norm = ref_emb / (np.linalg.norm(ref_emb) + 1e-8)
+            sim = float(np.dot(query_norm, ref_norm))
+            if sim > best_sim:
+                best_sim = sim
+                best_person = person_name
+
+        if best_person is None or best_sim < threshold:
+            return None
+
+        return best_person
 
     def save(self, path: str):
         """Save model and metadata"""
@@ -470,25 +622,3 @@ if __name__ == "__main__":
         print(f"  {k}: {v}")
 
     print("\n" + "=" * 50)
-    print("Usage Instructions")
-    print("=" * 50)
-    print("""
-1. Organize your data:
-   data/
-       person_1/
-           img1.jpg
-           img2.jpg
-           ...
-       person_2/
-           ...
-
-2. Train:
-   system = FaceRecognitionSystem(num_persons=5)
-   system.train('data/', epochs=50)
-   system.save('face_model.pt')
-
-3. Predict:
-   system.load('face_model.pt')
-   person, confidence, probs = system.predict('test_face.jpg')
-   print(f"Person: {person} ({confidence:.1%} confidence)")
-""")

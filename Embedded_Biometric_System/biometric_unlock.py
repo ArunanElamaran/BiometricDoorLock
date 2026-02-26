@@ -3,6 +3,8 @@ Smart lock with local face + voice authentication.
 Authentication runs on user input (e.g. button)
 """
 
+from Facial_Rec_Development import FaceRecognitionSystem
+
 
 class BiometricUnlock:
     """
