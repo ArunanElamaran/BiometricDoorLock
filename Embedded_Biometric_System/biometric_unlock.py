@@ -24,13 +24,11 @@ class BiometricUnlock:
         self.database_path = database_path
 
         # Face pipeline: model + image preprocessor
-        # NOTE: FaceRecognitionSystem expects its database at
-        # <project_root>/Facial_Rec_Development/database
+        # NOTE: FaceRecognitionSystem expects its database at <project_root>/Facial_Rec_Development/database
         project_root = Path(__file__).resolve().parents[1]
         face_model_path = project_root / "Facial_Rec_Development" / "face_model.pt"
 
-        # TODO: if you change num_persons/image_size during training,
-        # make sure they match the checkpoint used here.
+        # TODO: if you change num_persons/image_size during training, make sure they match the checkpoint used here.
         self.face_preprocessor = ImagePreprocessor(image_size=224)
         self.face_system = FaceRecognitionSystem(num_persons=5, image_size=224)
 
@@ -38,8 +36,7 @@ class BiometricUnlock:
         if face_model_path.is_file():
             self.face_system.load(str(face_model_path))
 
-        # On boot: cache all embeddings from Facial_Rec_Development/database
-        # so later recognition calls are fast.
+        # On boot: cache all embeddings from Facial_Rec_Development/database so later recognition calls are fast.
         try:
             self.face_system.initialize_database_cache()
         except Exception as e:  # noqa: BLE001
