@@ -42,73 +42,99 @@ class _FaceDataset(Dataset):
         return x.squeeze(0), self.labels[i]
 
 
-def _make_conv_block(in_c: int, out_c: int, num_convs: int) -> nn.Sequential:
-    layers = []
-    for i in range(num_convs):
-        layers += [
-            nn.ZeroPad2d(1),
-            nn.Conv2d(in_c if i == 0 else out_c, out_c, kernel_size=3),
-            nn.ReLU(inplace=True),
-        ]
-    layers.append(nn.MaxPool2d(2, stride=2))
-    return nn.Sequential(*layers)
-
-
 class LightweightFaceNet(nn.Module):
     """
-    VGG-style face network (input 224x224).
-    Same interface as before: num_persons, embedding_dim, forward(), get_embedding().
+    VGG-style face network (input 224x224) mirroring the provided Keras
+    Sequential architecture:
+
+        - Five conv blocks with 64, 128, 256, 512, 512 channels
+        - Max pooling between blocks
+        - Conv(4096, 7x7) -> Dropout
+        - Conv(4096, 1x1) -> Dropout
+        - Conv(num_persons, 1x1) -> Flatten -> logits
+
+    For compatibility with the rest of the code, this class still exposes
+    num_persons and get_embedding(). The embedding is taken from the
+    penultimate 4096-channel conv layer before the final classifier.
     """
 
     def __init__(
         self,
         image_size: int = 224,
         num_persons: int = 5,
-        embedding_dim: int = 128,
+        embedding_dim: int = 4096,
     ):
         super().__init__()
         self.num_persons = num_persons
         self.embedding_dim = embedding_dim
 
-        # Lightweight VGG-style backbone:
-        # 224 -> 112 -> 56 -> 28 -> 14 -> 7 with fewer channels
-        self.conv_blocks = nn.Sequential(
-            _make_conv_block(3, 32, 2),     # 224 -> 112
-            _make_conv_block(32, 64, 2),    # 112 -> 56
-            _make_conv_block(64, 128, 2),   # 56 -> 28
-            _make_conv_block(128, 256, 2),  # 28 -> 14 -> 7
-        )
+        # Convolutional backbone (VGG-like, using padding=1 instead of explicit ZeroPadding2D)
+        layers: list[nn.Module] = []
 
-        # Global pooling + small MLP head: 7x7x256 -> 256 -> embedding -> classifier
-        self.global_pool = nn.AdaptiveAvgPool2d((1, 1))
-        self.embedding_proj = nn.Sequential(
-            nn.Linear(256, embedding_dim),
-            nn.ReLU(inplace=True),
-            nn.Dropout(0.5),
-        )
-        self.classifier = nn.Linear(embedding_dim, num_persons)
+        def conv_block(in_c: int, out_c: int, num_convs: int):
+            block = []
+            for i in range(num_convs):
+                block.append(nn.Conv2d(in_c if i == 0 else out_c, out_c, kernel_size=3, padding=1))
+                block.append(nn.ReLU(inplace=True))
+            block.append(nn.MaxPool2d(kernel_size=2, stride=2))
+            return block
+
+        # Block 1: 64 filters, 2 convs
+        layers += conv_block(3, 64, 2)
+        # Block 2: 128 filters, 2 convs
+        layers += conv_block(64, 128, 2)
+        # Block 3: 256 filters, 3 convs
+        layers += conv_block(128, 256, 3)
+        # Block 4: 512 filters, 3 convs
+        layers += conv_block(256, 512, 3)
+        # Block 5: 512 filters, 3 convs
+        layers += conv_block(512, 512, 3)
+
+        self.features = nn.Sequential(*layers)
+
+        # Classifier head implemented as conv layers, like the Keras version.
+        # Input feature map after Block 5 for 224x224 is 7x7, so 7x7 conv acts as FC.
+        self.classifier_conv1 = nn.Conv2d(512, 4096, kernel_size=7)
+        self.classifier_relu1 = nn.ReLU(inplace=True)
+        self.classifier_drop1 = nn.Dropout(0.5)
+
+        self.classifier_conv2 = nn.Conv2d(4096, 4096, kernel_size=1)
+        self.classifier_relu2 = nn.ReLU(inplace=True)
+        self.classifier_drop2 = nn.Dropout(0.5)
+
+        self.classifier_conv3 = nn.Conv2d(4096, num_persons, kernel_size=1)
 
     def forward(self, x: torch.Tensor, return_embedding: bool = False):
         """
         Args:
             x: Face image [batch, 3, 224, 224]
-            return_embedding: If True, also return the embedding vector
+            return_embedding: If True, also return the 4096-dim embedding.
 
         Returns:
             logits: [batch, num_persons]
-            embedding (optional): [batch, embedding_dim]
+            embedding (optional): [batch, 4096]
         """
-        features = self.conv_blocks(x)              # [B, 256, 7, 7]
-        pooled = self.global_pool(features)         # [B, 256, 1, 1]
-        flat = pooled.view(pooled.size(0), -1)      # [B, 256]
-        emb = self.embedding_proj(flat)             # [B, embedding_dim]
-        logits = self.classifier(emb)
+        x = self.features(x)                           # [B, 512, 7, 7]
+        x = self.classifier_conv1(x)                  # [B, 4096, 1, 1]
+        x = self.classifier_relu1(x)
+        x = self.classifier_drop1(x)
+
+        x = self.classifier_conv2(x)                  # [B, 4096, 1, 1]
+        x = self.classifier_relu2(x)
+        x = self.classifier_drop2(x)
+
+        # Embedding is the flattened 4096 feature vector
+        emb = x.view(x.size(0), -1)                   # [B, 4096]
+
+        x = self.classifier_conv3(x)                  # [B, num_persons, 1, 1]
+        logits = x.view(x.size(0), -1)                # [B, num_persons]
+
         if return_embedding:
             return logits, emb
         return logits
 
     def get_embedding(self, x: torch.Tensor) -> torch.Tensor:
-        """Extract face embedding (useful for verification)"""
+        """Extract 4096-dim face embedding (useful for verification)."""
         _, emb = self.forward(x, return_embedding=True)
         return emb
 
@@ -207,58 +233,98 @@ class FaceRecognitionSystem:
         self,
         data_dir: str,
         debug_failures: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        validation_split: float = 0.2,
+    ) -> tuple[list[str], list[int], list[str], list[int]]:
         """
-        Load dataset from pre-split directory structure:
+        Load dataset from a single directory and create a random train/val split,
+        matching the behavior of the voice model.
 
-        data_dir/
-            train/
+        Expected directory structure:
+
+            data_dir/
                 person_name/
                     img1.jpg
-                    ...
-                another_person/
-                    ...
-            val/
-                person_name/
+                    img2.jpg
                     ...
                 another_person/
                     ...
 
-        Person names and label order are taken from the union of data_dir/train/ and
-        data_dir/val/ subdirs, so both splits can contain different identity sets.
+        All images are first collected, then randomly split into training and
+        validation subsets using the given validation_split ratio.
 
         Returns:
             train_paths, train_labels, val_paths, val_labels
         """
         data_path = Path(data_dir)
-        train_path = data_path / "train"
-        val_path = data_path / "val"
+        if not data_path.is_dir():
+            raise FileNotFoundError(f"Expected dataset directory at {data_path}")
 
-        if not train_path.is_dir():
-            raise FileNotFoundError(f"Expected training split at {train_path}")
-        if not val_path.is_dir():
-            raise FileNotFoundError(f"Expected validation split at {val_path}")
+        image_extensions = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 
-        train_person_names = {d.name for d in train_path.iterdir() if d.is_dir()}
-        val_person_names = {d.name for d in val_path.iterdir() if d.is_dir()}
-        self.person_names = sorted(train_person_names | val_person_names)
+        # Person subdirectories under data_dir mirror the audio model's speaker dirs
+        person_dirs = sorted([d for d in data_path.iterdir() if d.is_dir()])
+        self.person_names = [d.name for d in person_dirs]
         n_persons = len(self.person_names)
+
+        if n_persons == 0:
+            raise ValueError(f"No person subdirectories found under {data_path}")
 
         if n_persons != self.model.num_persons:
             raise ValueError(
-                f"data/train has {n_persons} persons but model was created with "
+                f"{data_path} has {n_persons} persons but model was created with "
                 f"num_persons={self.model.num_persons}. Use FaceRecognitionSystem(num_persons={n_persons})."
             )
 
         print(f"Found {n_persons} persons: {self.person_names[:5]}{'...' if n_persons > 5 else ''}")
 
-        print("Loading train split (paths only, no preload)...")
-        train_paths, train_labels = self._load_split(train_path, self.person_names, debug_failures)
-        print(f"  Train: {len(train_paths)} samples")
+        # Collect all image paths and labels
+        all_paths: list[str] = []
+        all_labels: list[int] = []
+        name_to_idx = {name: i for i, name in enumerate(self.person_names)}
+        total = 0
 
-        print("Loading val split (paths only, no preload)...")
-        val_paths, val_labels = self._load_split(val_path, self.person_names, debug_failures)
-        print(f"  Val: {len(val_paths)} samples")
+        for idx, person_dir in enumerate(person_dirs):
+            image_files = [
+                f for f in person_dir.iterdir()
+                if f.is_file() and f.suffix.lower() in image_extensions
+            ]
+            image_files = sorted(image_files)
+            for image_file in image_files:
+                path = str(image_file)
+                if debug_failures:
+                    try:
+                        self.preprocessor(path, align=False)
+                        all_paths.append(path)
+                        all_labels.append(name_to_idx[person_dir.name])
+                        total += 1
+                    except Exception as e:
+                        print(f"    Warning: Failed to load {image_file.name}: {e}")
+                        self._show_failed_image_and_wait(path, str(e))
+                else:
+                    all_paths.append(path)
+                    all_labels.append(name_to_idx[person_dir.name])
+                    total += 1
+            if (idx + 1) % 50 == 0:
+                print(f"  ... {total} images from {idx + 1} persons")
+
+        if not all_paths:
+            raise ValueError(f"No image files found under {data_path}")
+
+        # Random train/val split following the audio model pattern
+        n_samples = len(all_paths)
+        indices = torch.randperm(n_samples)
+        n_val = int(n_samples * validation_split)
+
+        val_indices = indices[:n_val]
+        train_indices = indices[n_val:]
+
+        train_paths = [all_paths[i] for i in train_indices]
+        train_labels = [all_labels[i] for i in train_indices]
+        val_paths = [all_paths[i] for i in val_indices]
+        val_labels = [all_labels[i] for i in val_indices]
+
+        print(f"  Total images: {n_samples}")
+        print(f"  Train: {len(train_paths)} samples, Val: {len(val_paths)} samples (split={validation_split:.2f})")
 
         return train_paths, train_labels, val_paths, val_labels
 
@@ -270,15 +336,24 @@ class FaceRecognitionSystem:
         learning_rate: float = 0.001,
         debug_failures: bool = False,
         num_workers: int = 0,
+        validation_split: float = 0.2,
     ):
         """Train the model on the dataset using cross-entropy classification
         (same strategy as the voice model). Expects data_dir with train/ and
         val/ subdirs. Images are loaded on demand (streaming) to avoid OOM.
         If debug_failures=True, each failed image is shown during the
         path-collection phase; press ESC to continue."""
-        print("Loading dataset (path lists only)...")
+        # Warm start from existing best checkpoint if available
+        best_path = Path("best_model.pt")
+        if best_path.is_file():
+            print(f"Found existing checkpoint at {best_path}, loading before training...")
+            self.load(str(best_path))
+
+        print("Loading dataset (path lists only, random train/val split)...")
         train_paths, train_labels, val_paths, val_labels = self.load_train_val_splits(
-            data_dir, debug_failures=debug_failures
+            data_dir,
+            debug_failures=debug_failures,
+            validation_split=validation_split,
         )
 
         train_dataset = _FaceDataset(train_paths, train_labels, self.preprocessor, align=False)
