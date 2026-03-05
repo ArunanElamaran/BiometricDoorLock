@@ -213,13 +213,15 @@ def export_synthetic_mlp_to_onnx(target_params: int, onnx_path: Path) -> None:
     model.eval()
     dummy = torch.randn(1, input_dim, dtype=torch.float32)
     onnx_path.parent.mkdir(parents=True, exist_ok=True)
+    # Use a relatively recent ONNX opset to avoid version‑conversion issues.
+    # Hailo's compiler will tell you if it needs a different opset.
     torch.onnx.export(
         model,
         dummy,
         str(onnx_path),
         input_names=["input"],
         output_names=["output"],
-        opset_version=13,
+        opset_version=18,
     )
 
 
