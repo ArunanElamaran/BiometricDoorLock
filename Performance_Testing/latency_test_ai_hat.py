@@ -294,12 +294,6 @@ def main() -> None:
         help="Maximum model size in parameters (default: 1e9). Reduce on low-memory devices.",
     )
     parser.add_argument(
-        "--output",
-        type=str,
-        default="",
-        help="Optional path to save CSV results.",
-    )
-    parser.add_argument(
         "--device",
         type=str,
         default="",
@@ -342,8 +336,15 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    print("=" * 80)
+    print("Latency benchmark starting...")
+    print(f"Backend requested: {args.backend}")
+    print(f"Max parameter budget: {int(args.max_params):,}")
+    print("=" * 80)
+
     max_params = int(args.max_params)
     target_sizes = get_target_sizes(max_params)
+    print(f"Computed target parameter sizes: {target_sizes}")
 
     if args.generate_hailo_models:
         onnx_dir = Path(args.hailo_onnx_dir)
@@ -356,6 +357,7 @@ def main() -> None:
 
         compile_template = args.hailo_compile_template or None
         generate_hailo_models(target_sizes, onnx_dir, hef_dir, compile_template)
+        print(f"Finished generating Hailo models for {len(target_sizes)} sizes.")
 
     results: list[dict] = []
 
@@ -379,7 +381,9 @@ def main() -> None:
         print(f"Warmup runs: {args.warmup}, Timed runs: {args.runs}")
         print("-" * 80)
 
-        for hef_path in hef_paths:
+        total = len(hef_paths)
+        for idx, hef_path in enumerate(hef_paths, start=1):
+            print(f"[{idx}/{total}] Running Hailo latency test for HEF: {hef_path.name}")
             try:
                 stats = _hailo_latency_for_hef(
                     hef_path,
@@ -424,7 +428,9 @@ def main() -> None:
         print(f"Warmup runs: {args.warmup}, Timed runs: {args.runs}")
         print("-" * 80)
 
-        for target in target_sizes:
+        total = len(target_sizes)
+        for idx, target in enumerate(target_sizes, start=1):
+            print(f"[{idx}/{total}] Building and benchmarking PyTorch MLP with ~{target:,} params...")
             try:
                 model, input_dim = build_model_with_params(target)
                 actual_params = count_parameters(model)
@@ -455,19 +461,6 @@ def main() -> None:
                         torch.cuda.empty_cache()
                     break
                 raise
-
-    if args.output:
-        out_path = Path(args.output)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(out_path, "w") as f:
-            if args.backend == "hailo":
-                headers = ["hef_name", "param_hint_from_name", "mean_ms", "median_ms", "std_ms", "min_ms", "max_ms", "p95_ms"]
-            else:
-                headers = ["target_params", "actual_params", "mean_ms", "median_ms", "std_ms", "min_ms", "max_ms", "p95_ms"]
-            f.write(",".join(headers) + "\n")
-            for r in results:
-                f.write(",".join(str(r.get(h, "")) for h in headers) + "\n")
-        print(f"\nResults written to {out_path}")
 
     return results
 
