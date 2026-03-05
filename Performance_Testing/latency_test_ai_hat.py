@@ -239,22 +239,22 @@ def generate_hailo_models(
 
     Example (hailomz-based, adjust to your environment):
         --hailo-compile-template \\
-          \"hailomz compile mlp_{params} --ckpt={onnx} --hw-arch hailo8l \\
-             --calib-path /path/to/calib --performance --output-dir {hef_dir}\"
+          "hailomz compile mlp_{params} --ckpt={onnx} --hw-arch hailo8l \\
+             --calib-path /path/to/calib --performance --output-dir {hef_dir}"
     """
     onnx_dir.mkdir(parents=True, exist_ok=True)
     hef_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f\"Generating synthetic ONNX models in {onnx_dir} for sizes: {target_sizes}\")
+    print(f"Generating synthetic ONNX models in {onnx_dir} for sizes: {target_sizes}")
     if compile_template:
-        print(\"Will also invoke Hailo compile command template per model.\")
-        print(\"Template (placeholders: {onnx}, {hef_dir}, {params}):\")
-        print(f\"  {compile_template}\")
+        print("Will also invoke Hailo compile command template per model.")
+        print("Template (placeholders: {onnx}, {hef_dir}, {params}):")
+        print(f"  {compile_template}")
 
     for params in target_sizes:
-        onnx_path = onnx_dir / f\"mlp_{params}.onnx\"
+        onnx_path = onnx_dir / f"mlp_{params}.onnx"
         export_synthetic_mlp_to_onnx(params, onnx_path)
-        print(f\"Exported ONNX for {params} params -> {onnx_path}\")
+        print(f"Exported ONNX for {params} params -> {onnx_path}")
 
         if compile_template:
             cmd = compile_template.format(
@@ -262,11 +262,11 @@ def generate_hailo_models(
                 hef_dir=str(hef_dir),
                 params=params,
             )
-            print(f\"Running compile command: {cmd}\")
+            print(f"Running compile command: {cmd}")
             result = subprocess.run(cmd, shell=True)
             if result.returncode != 0:
                 print(
-                    f\"WARNING: compile command failed (exit code {result.returncode}) for {onnx_path}\",
+                    f"WARNING: compile command failed (exit code {result.returncode}) for {onnx_path}",
                     file=sys.stderr,
                 )
 
