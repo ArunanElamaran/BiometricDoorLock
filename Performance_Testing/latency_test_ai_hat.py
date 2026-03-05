@@ -255,8 +255,11 @@ def generate_hailo_models(
 
     for params in target_sizes:
         onnx_path = onnx_dir / f"mlp_{params}.onnx"
-        export_synthetic_mlp_to_onnx(params, onnx_path)
-        print(f"Exported ONNX for {params} params -> {onnx_path}")
+        if onnx_path.exists():
+            print(f"ONNX already exists for {params} params -> {onnx_path}, skipping export.")
+        else:
+            export_synthetic_mlp_to_onnx(params, onnx_path)
+            print(f"Exported ONNX for {params} params -> {onnx_path}")
 
         if compile_template:
             cmd = compile_template.format(
