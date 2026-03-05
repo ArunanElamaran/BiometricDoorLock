@@ -189,6 +189,64 @@ def _hailo_latency_for_hef(
     }
 
 
+def _onnx_cpu_latency_for_model(
+    onnx_path: Path,
+    num_warmup: int = 10,
+    num_runs: int = 100,
+) -> dict:
+    """
+    Measure latency for a given ONNX model running on the Raspberry Pi CPU.
+
+    This uses onnxruntime with the CPU execution provider. The idea is to run
+    the *same exported model* that was compiled to HEF, so we can compare the
+    Hailo NPU latency vs CPU latency apples-to-apples.
+    """
+    try:
+        import onnxruntime as ort
+    except ImportError as exc:
+        raise RuntimeError(
+            "onnxruntime is required for CPU ONNX benchmarks. "
+            "Install it with `pip install onnxruntime` in your environment."
+        ) from exc
+
+    sess = ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
+    input_meta = sess.get_inputs()[0]
+    input_name = input_meta.name
+
+    # Resolve dynamic dimensions (None or non-int) to 1 so we can create a dummy tensor.
+    shape = []
+    for dim in input_meta.shape:
+        if isinstance(dim, int) and dim > 0:
+            shape.append(dim)
+        else:
+            shape.append(1)
+
+    x = np.random.rand(*shape).astype(np.float32)
+
+    latencies_ms: list[float] = []
+
+    # Warmup
+    for _ in range(num_warmup):
+        _ = sess.run(None, {input_name: x})
+
+    # Timed runs
+    for _ in range(num_runs):
+        t0 = time.perf_counter()
+        _ = sess.run(None, {input_name: x})
+        t1 = time.perf_counter()
+        latencies_ms.append((t1 - t0) * 1000.0)
+
+    arr = np.array(latencies_ms, dtype=np.float64)
+    return {
+        "mean_ms": float(np.mean(arr)),
+        "median_ms": float(np.median(arr)),
+        "std_ms": float(np.std(arr)),
+        "min_ms": float(np.min(arr)),
+        "max_ms": float(np.max(arr)),
+        "p95_ms": float(np.percentile(arr, 95)),
+    }
+
+
 def _parse_params_from_hef_name(hef_path: Path) -> int | None:
     """
     Best-effort extraction of parameter count from HEF filename.
@@ -339,6 +397,14 @@ def main() -> None:
             "--calib-path /path/to/calib --performance --output-dir {hef_dir}'"
         ),
     )
+    parser.add_argument(
+        "--compare-hailo-vs-cpu",
+        action="store_true",
+        help=(
+            "When using backend='hailo', also run the same ONNX models on the CPU "
+            "using onnxruntime so Hailo vs CPU latency can be compared."
+        ),
+    )
     args = parser.parse_args()
 
     print("=" * 80)
@@ -384,8 +450,12 @@ def main() -> None:
         print(f"Backend: Hailo NPU (HailoRT)")
         print(f"HEF directory: {hef_dir}")
         print(f"Warmup runs: {args.warmup}, Timed runs: {args.runs}")
+        if args.compare_hailo_vs_cpu:
+            print("Comparison mode: will also run the same ONNX models on CPU (onnxruntime).")
+            print(f"ONNX directory expected: {args.hailo_onnx_dir}")
         print("-" * 80)
 
+        onnx_dir = Path(args.hailo_onnx_dir)
         total = len(hef_paths)
         for idx, hef_path in enumerate(hef_paths, start=1):
             print(f"[{idx}/{total}] Running Hailo latency test for HEF: {hef_path.name}")
@@ -396,18 +466,63 @@ def main() -> None:
                     num_runs=args.runs,
                 )
                 param_hint = _parse_params_from_hef_name(hef_path)
+                cpu_stats = None
+
+                if args.compare_hailo_vs_cpu:
+                    if param_hint is None:
+                        print(
+                            f"  Could not infer param count from HEF name '{hef_path.name}', "
+                            "skipping CPU comparison.",
+                            file=sys.stderr,
+                        )
+                    else:
+                        onnx_path = onnx_dir / f"mlp_{param_hint}.onnx"
+                        if not onnx_path.is_file():
+                            print(
+                                f"  Expected ONNX file {onnx_path} for CPU comparison but it does not exist.",
+                                file=sys.stderr,
+                            )
+                        else:
+                            print(f"  Running CPU (onnxruntime) latency test for ONNX: {onnx_path.name}")
+                            cpu_stats = _onnx_cpu_latency_for_model(
+                                onnx_path,
+                                num_warmup=args.warmup,
+                                num_runs=args.runs,
+                            )
+
                 row = {
                     "hef_name": hef_path.name,
                     "param_hint_from_name": param_hint if param_hint is not None else "",
                     **stats,
                 }
+                if cpu_stats is not None:
+                    row.update(
+                        {
+                            "cpu_mean_ms": cpu_stats["mean_ms"],
+                            "cpu_p95_ms": cpu_stats["p95_ms"],
+                        }
+                    )
                 results.append(row)
-                print(
-                    f"HEF: {hef_path.name:<32} | "
-                    f"Mean: {stats['mean_ms']:>8.2f} ms | "
-                    f"Median: {stats['median_ms']:>8.2f} ms | "
-                    f"P95: {stats['p95_ms']:>8.2f} ms"
-                )
+
+                if cpu_stats is not None:
+                    speedup = (
+                        cpu_stats["mean_ms"] / stats["mean_ms"]
+                        if stats["mean_ms"] > 0
+                        else float("inf")
+                    )
+                    print(
+                        f"HEF: {hef_path.name:<32} | "
+                        f"Hailo mean: {stats['mean_ms']:>8.2f} ms | "
+                        f"CPU mean: {cpu_stats['mean_ms']:>8.2f} ms | "
+                        f"Speedup: {speedup:>6.2f}x"
+                    )
+                else:
+                    print(
+                        f"HEF: {hef_path.name:<32} | "
+                        f"Mean: {stats['mean_ms']:>8.2f} ms | "
+                        f"Median: {stats['median_ms']:>8.2f} ms | "
+                        f"P95: {stats['p95_ms']:>8.2f} ms"
+                    )
             except RuntimeError as e:
                 print(f"HEF: {hef_path.name:<32} | ERROR: {e}", file=sys.stderr)
     else:
