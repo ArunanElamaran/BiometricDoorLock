@@ -365,9 +365,14 @@ def main() -> None:
     parser.add_argument(
         "--backend",
         type=str,
-        choices=["torch", "hailo"],
+        choices=["torch", "hailo", "cpu"],
         default="torch",
-        help="Backend to use: 'torch' (default) for CPU/GPU, or 'hailo' to run compiled .hef models on the Hailo NPU.",
+        help=(
+            "Backend to use: "
+            "'torch' (default) benchmarks PyTorch models on CPU/GPU, "
+            "'cpu' benchmarks ONNX models on CPU via onnxruntime, "
+            "or 'hailo' runs compiled .hef models on the Hailo NPU (optionally compared to CPU ONNX)."
+        ),
     )
     parser.add_argument(
         "--hailo-hefs-dir",
@@ -432,7 +437,54 @@ def main() -> None:
 
     results: list[dict] = []
 
-    if args.backend == "hailo":
+    if args.backend == "cpu":
+        # CPU-only ONNX benchmarks. This does NOT require any Hailo tooling.
+        onnx_dir = Path(args.hailo_onnx_dir)
+        onnx_paths = sorted(
+            onnx_dir.glob("mlp_*.onnx"),
+            key=lambda p: _parse_params_from_hef_name(p) or 0,
+        )
+        if not onnx_paths:
+            print(f"No mlp_*.onnx files found in {onnx_dir}.", file=sys.stderr)
+            print(
+                "Run with --generate-hailo-models to create them, e.g. "
+                "`python latency_test_ai_hat.py --backend cpu --generate-hailo-models --max-params 2e7`",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        print(f"Backend: CPU (onnxruntime)")
+        print(f"ONNX directory: {onnx_dir}")
+        print(f"Warmup runs: {args.warmup}, Timed runs: {args.runs}")
+        print("-" * 80)
+
+        total = len(onnx_paths)
+        for idx, onnx_path in enumerate(onnx_paths, start=1):
+            param_hint = _parse_params_from_hef_name(onnx_path)
+            print(f"[{idx}/{total}] Running CPU (onnxruntime) latency test for ONNX: {onnx_path.name}")
+            try:
+                cpu_stats = _onnx_cpu_latency_for_model(
+                    onnx_path,
+                    num_warmup=args.warmup,
+                    num_runs=args.runs,
+                )
+                results.append(
+                    {
+                        "onnx_name": onnx_path.name,
+                        "param_hint_from_name": param_hint if param_hint is not None else "",
+                        **cpu_stats,
+                    }
+                )
+                print(
+                    f"ONNX: {onnx_path.name:<32} | "
+                    f"Mean: {cpu_stats['mean_ms']:>8.2f} ms | "
+                    f"Median: {cpu_stats['median_ms']:>8.2f} ms | "
+                    f"P95: {cpu_stats['p95_ms']:>8.2f} ms"
+                )
+            except RuntimeError as e:
+                print(f"ONNX: {onnx_path.name:<32} | ERROR: {e}", file=sys.stderr)
+
+    elif args.backend == "hailo":
         if not args.hailo_hefs_dir:
             print("--hailo-hefs-dir is required when backend='hailo'.", file=sys.stderr)
             sys.exit(1)
