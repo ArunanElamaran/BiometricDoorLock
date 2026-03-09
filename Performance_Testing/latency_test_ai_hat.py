@@ -209,7 +209,12 @@ def _onnx_cpu_latency_for_model(
             "Install it with `pip install onnxruntime` in your environment."
         ) from exc
 
-    sess = ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
+    # Keep CPU threading conservative on the Pi to reduce variability and avoid
+    # over-subscribing cores.
+    sess_options = ort.SessionOptions()
+    sess_options.intra_op_num_threads = 1
+    sess_options.inter_op_num_threads = 1
+    sess = ort.InferenceSession(str(onnx_path), sess_options=sess_options, providers=["CPUExecutionProvider"])
     input_meta = sess.get_inputs()[0]
     input_name = input_meta.name
 
@@ -254,7 +259,9 @@ def _parse_params_from_hef_name(hef_path: Path) -> int | None:
     If your HEF files are named like `model_20000.hef` or `net-100M.hef`,
     this will pull out the first integer substring (e.g. 20000 or 100).
     """
-    m = re.search(r"(\\d+)", hef_path.stem)
+    # NOTE: this is intended to match digits in filenames like:
+    #   mlp_2000000.onnx, mlp_2000000.hef
+    m = re.search(r"(\d+)", hef_path.stem)
     if not m:
         return None
     try:
@@ -410,6 +417,15 @@ def main() -> None:
             "using onnxruntime so Hailo vs CPU latency can be compared."
         ),
     )
+    parser.add_argument(
+        "--cpu-max-params",
+        type=float,
+        default=2e8,
+        help=(
+            "Safety cap for CPU ONNX benchmarking (default: 2e8 params). "
+            "Very large ONNX models can exhaust RAM or crash onnxruntime on Raspberry Pi."
+        ),
+    )
     args = parser.parse_args()
 
     print("=" * 80)
@@ -461,6 +477,13 @@ def main() -> None:
         total = len(onnx_paths)
         for idx, onnx_path in enumerate(onnx_paths, start=1):
             param_hint = _parse_params_from_hef_name(onnx_path)
+            if param_hint is not None and param_hint > int(args.cpu_max_params):
+                print(
+                    f"[{idx}/{total}] Skipping {onnx_path.name} ({param_hint:,} params) "
+                    f"because it exceeds --cpu-max-params={int(args.cpu_max_params):,}",
+                    file=sys.stderr,
+                )
+                continue
             print(f"[{idx}/{total}] Running CPU (onnxruntime) latency test for ONNX: {onnx_path.name}")
             try:
                 cpu_stats = _onnx_cpu_latency_for_model(
@@ -528,6 +551,13 @@ def main() -> None:
                             file=sys.stderr,
                         )
                     else:
+                        if param_hint > int(args.cpu_max_params):
+                            print(
+                                f"  Skipping CPU comparison for {hef_path.name} ({param_hint:,} params) "
+                                f"because it exceeds --cpu-max-params={int(args.cpu_max_params):,}",
+                                file=sys.stderr,
+                            )
+                        else:
                         onnx_path = onnx_dir / f"mlp_{param_hint}.onnx"
                         if not onnx_path.is_file():
                             print(
