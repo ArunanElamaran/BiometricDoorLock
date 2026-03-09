@@ -558,19 +558,19 @@ def main() -> None:
                                 file=sys.stderr,
                             )
                         else:
-                        onnx_path = onnx_dir / f"mlp_{param_hint}.onnx"
-                        if not onnx_path.is_file():
-                            print(
-                                f"  Expected ONNX file {onnx_path} for CPU comparison but it does not exist.",
-                                file=sys.stderr,
-                            )
-                        else:
-                            print(f"  Running CPU (onnxruntime) latency test for ONNX: {onnx_path.name}")
-                            cpu_stats = _onnx_cpu_latency_for_model(
-                                onnx_path,
-                                num_warmup=args.warmup,
-                                num_runs=args.runs,
-                            )
+                            onnx_path = onnx_dir / f"mlp_{param_hint}.onnx"
+                            if not onnx_path.is_file():
+                                print(
+                                    f"  Expected ONNX file {onnx_path} for CPU comparison but it does not exist.",
+                                    file=sys.stderr,
+                                )
+                            else:
+                                print(f"  Running CPU (onnxruntime) latency test for ONNX: {onnx_path.name}")
+                                cpu_stats = _onnx_cpu_latency_for_model(
+                                    onnx_path,
+                                    num_warmup=args.warmup,
+                                    num_runs=args.runs,
+                                )
 
                 row = {
                     "hef_name": hef_path.name,
