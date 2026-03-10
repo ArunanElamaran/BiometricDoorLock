@@ -8,8 +8,12 @@ Usage:
     python latency_test_ai_hat.py [--runs 100] [--warmup 10] [--max-params 1e9] [--output results.csv]
 
 Requirements:
-    pip install torch numpy
+    pip install numpy
+    # For PyTorch-based generation/backends only:
+    #   pip install torch
 """
+
+from __future__ import annotations
 
 import argparse
 import math
@@ -20,8 +24,6 @@ import time
 from pathlib import Path
 
 import numpy as np
-import torch
-import torch.nn as nn
 
 
 def get_target_sizes(max_params: int = 1_000_000_000) -> list[int]:
@@ -38,17 +40,19 @@ def get_target_sizes(max_params: int = 1_000_000_000) -> list[int]:
     return out
 
 
-def count_parameters(module: nn.Module) -> int:
+def count_parameters(module) -> int:
     return sum(p.numel() for p in module.parameters())
 
 
-def build_model_with_params(target_params: int, seed: int = 42) -> nn.Module:
+def build_model_with_params(target_params: int, seed: int = 42):
     """
     Build a single-layer MLP with approximately target_params parameters.
     Uses one Linear(d, d) so that d*(d+1) ≈ target_params (d = sqrt-ish).
     Weights are randomized.
     """
     # d*(d+1) = target => d^2 + d - target = 0 => d = (-1 + sqrt(1+4*target))/2
+    import torch
+    import torch.nn as nn
     d = max(1, int((-1 + math.sqrt(1 + 4 * target_params)) // 2))
     actual = d * (d + 1)
     # optionally add a tiny second layer to get closer to target if we're under
@@ -73,13 +77,14 @@ def build_model_with_params(target_params: int, seed: int = 42) -> nn.Module:
 
 
 def run_latency_test(
-    model: nn.Module,
+    model,
     input_dim: int,
-    device: torch.device,
+    device,
     num_warmup: int = 10,
     num_runs: int = 100,
 ) -> dict:
     """Run warmup then timed forward passes; return latency stats in milliseconds."""
+    import torch
     model.eval()
     dummy = torch.randn(1, input_dim, device=device, dtype=torch.float32)
     # warmup
@@ -274,6 +279,7 @@ def export_synthetic_mlp_to_onnx(target_params: int, onnx_path: Path) -> None:
     """
     Export a synthetic MLP (matching our param-count logic) to ONNX for Hailo compilation.
     """
+    import torch
     model, input_dim = build_model_with_params(target_params)
     model.eval()
     dummy = torch.randn(1, input_dim, dtype=torch.float32)
@@ -621,6 +627,7 @@ def main() -> None:
                 print(f"HEF: {hef_path.name:<32} | ERROR: {e}", file=sys.stderr)
     else:
         if args.device:
+            import torch
             if args.device == "cuda" and not torch.cuda.is_available():
                 print("CUDA requested but not available; using CPU.", file=sys.stderr)
                 device = torch.device("cpu")
@@ -630,6 +637,7 @@ def main() -> None:
             else:
                 device = torch.device(args.device)
         else:
+            import torch
             if torch.cuda.is_available():
                 device = torch.device("cuda")
             elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
