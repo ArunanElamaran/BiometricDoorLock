@@ -426,6 +426,14 @@ def main() -> None:
             "Very large ONNX models can exhaust RAM or crash onnxruntime on Raspberry Pi."
         ),
     )
+    parser.add_argument(
+        "--only-generate",
+        action="store_true",
+        help=(
+            "If set, only generate ONNX/HEF models (when --generate-hailo-models is used) "
+            "and then exit without running any latency benchmarks."
+        ),
+    )
     args = parser.parse_args()
 
     print("=" * 80)
@@ -450,6 +458,10 @@ def main() -> None:
         compile_template = args.hailo_compile_template or None
         generate_hailo_models(target_sizes, onnx_dir, hef_dir, compile_template)
         print(f"Finished generating Hailo models for {len(target_sizes)} sizes.")
+
+        if args.only_generate:
+            print("Generation-only mode enabled (--only-generate); exiting before running benchmarks.")
+            return []
 
     results: list[dict] = []
 
