@@ -24,7 +24,7 @@ from pathlib import Path
 ONNX_DIR = Path("hailo_onnx")
 WORK_DIR = Path("hailo_work")          # holds .har and intermediate files
 HEF_DIR = Path("hailo_hefs")           # final .hef output
-HW_ARCH = "hailo8l"                    # AI HAT+ / Hailo-8L target
+HW_ARCH = "hailo8"                    # AI HAT+ / Hailo-8L target
 
 
 def run(cmd: list[str]) -> None:
