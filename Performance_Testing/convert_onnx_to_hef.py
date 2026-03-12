@@ -54,7 +54,8 @@ def main() -> None:
         # Mimic:
         #   rm -f hailo_hefs/*.hef
         #   rm -f hailo_work/*.har
-        #   rm -f *_optimized.har
+        #   rm -f hailo_work/*_optimized.har
+        #   rm -f hailo_work/*_compiled.har (if created by tools)
         for path in HEF_DIR.glob("*.hef"):
             try:
                 path.unlink()
@@ -65,19 +66,18 @@ def main() -> None:
                 path.unlink()
             except FileNotFoundError:
                 pass
-        for path in Path(".").glob("*_optimized.har"):
+        for path in WORK_DIR.glob("*.log"):
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+        for path in WORK_DIR.glob("*.hef"):
             try:
                 path.unlink()
             except FileNotFoundError:
                 pass
 
-        for path in Path(".").glob("*.log"):
-            try:
-                path.unlink()
-            except FileNotFoundError:
-                pass
-
-        print("Removed existing HEF and HAR artifacts.")
+        print("Removed existing HEF and HAR artifacts from work/output folders.")
 
     if not ONNX_DIR.is_dir():
         print(f"ONNX directory not found: {ONNX_DIR}", file=sys.stderr)
@@ -92,11 +92,11 @@ def main() -> None:
         sys.exit(1)
 
     for onnx_path in onnx_files:
-        stem = onnx_path.stem                     # e.g. "mlp_20000"
-        har_path = WORK_DIR / f"{stem}.har"       # parsed / quantized
-        optimized_har_path = Path(f"{stem}_optimized.har")   # produced by hailo optimize
-        local_hef_path = Path(f"{stem}.hef")                 # produced by hailo compiler
-        hef_path = HEF_DIR / f"{stem}.hef"        # final executable
+        stem = onnx_path.stem                             # e.g. "mlp_20000"
+        har_path = WORK_DIR / f"{stem}.har"               # parsed / quantized
+        optimized_har_path = WORK_DIR / f"{stem}_optimized.har"  # produced by hailo optimize
+        local_hef_path = WORK_DIR / f"{stem}.hef"         # produced by hailo compiler
+        hef_path = HEF_DIR / f"{stem}.hef"                # final executable
 
         print("=" * 80)
         print(f"Processing {onnx_path} → {hef_path}")
@@ -143,7 +143,9 @@ def main() -> None:
             HW_ARCH,
         ]
         print("Running:", " ".join(COMPILE_CMD))
-        result = subprocess.run(COMPILE_CMD)
+        # Run compiler in WORK_DIR so any generated *_compiled.har / .hef
+        # are written there instead of cluttering the project root.
+        result = subprocess.run(COMPILE_CMD, cwd=str(WORK_DIR))
         if result.returncode != 0:
             print(
                 f"WARNING: hailo compiler failed with exit code {result.returncode} for {optimized_har_path}",
