@@ -76,8 +76,16 @@ def main() -> None:
                 path.unlink()
             except FileNotFoundError:
                 pass
+        # Also remove .log, .har, and .hef from the current working directory
+        cwd = Path.cwd()
+        for ext in ("*.log", "*.har", "*.hef"):
+            for path in cwd.glob(ext):
+                try:
+                    path.unlink()
+                except FileNotFoundError:
+                    pass
 
-        print("Removed existing HEF and HAR artifacts from work/output folders.")
+        print("Removed existing HEF and HAR artifacts from work/output folders and current directory.")
 
     if not ONNX_DIR.is_dir():
         print(f"ONNX directory not found: {ONNX_DIR}", file=sys.stderr)
