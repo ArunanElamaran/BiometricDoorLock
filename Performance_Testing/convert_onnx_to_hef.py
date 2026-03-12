@@ -50,18 +50,14 @@ def main() -> None:
     for onnx_path in onnx_files:
         stem = onnx_path.stem                     # e.g. "mlp_20000"
         har_path = WORK_DIR / f"{stem}.har"       # parsed / quantized
+        optimized_har_path = Path(f"{stem}_optimized.har")   # produced by hailo optimize
+        local_hef_path = Path(f"{stem}.hef")                 # produced by hailo compiler
         hef_path = HEF_DIR / f"{stem}.hef"        # final executable
 
         print("=" * 80)
         print(f"Processing {onnx_path} → {hef_path}")
         print("=" * 80)
 
-        # ------------------------------------------------------------------
-        # 1) PARSE: ONNX → HAR (unquantized)
-        # Per RidgeRun / Hailo docs:
-        #   hailo parser onnx models/yolov5m_vehicles.onnx -y --hw-arch hailo8l --har-path models/yolov5m_vehicles.har
-        # We adapt it to our paths and filenames.
-        # ------------------------------------------------------------------
         if not har_path.exists():
             PARSE_CMD = [
                 "hailo",
@@ -78,13 +74,6 @@ def main() -> None:
         else:
             print(f"{har_path} already exists, skipping parse step.")
 
-        # ------------------------------------------------------------------
-        # 2) OPTIMIZE / QUANTIZE: HAR → quantized HAR
-        # The article shows (with real calib + model script):
-        #   hailo optimize yolov5m_vehicles.har --hw-arch hailo8l --calib-set-path ./calib_set.npy --model-script default_model_script.all
-        # For our synthetic MLPs, we use the documented `--use-random-calib-set`
-        # option instead of a real calibration dataset.
-        # ------------------------------------------------------------------
         OPTIMIZE_CMD = [
             "hailo",
             "optimize",
@@ -95,40 +84,34 @@ def main() -> None:
         ]
         run(OPTIMIZE_CMD)
 
-        # ------------------------------------------------------------------
-        # 3) COMPILE: quantized HAR → HEF
-        # The article shows:
-        #   hailo compiler yolov5m_vehicles.har --hw-arch hailo8l
-        # which produces `<name>.hef` in the working directory. Here we let
-        # the compiler create the default `<stem>.hef` next to `har_path`,
-        # and then move/rename it into HEF_DIR.
-        # ------------------------------------------------------------------
-        # Run compiler in the HAR directory so the output `.hef` lands there.
-        compile_cwd = har_path.parent
+        if not optimized_har_path.is_file():
+            print(
+                f"WARNING: Expected optimized HAR was not found: {optimized_har_path}",
+                file=sys.stderr,
+            )
+            continue
+
         COMPILE_CMD = [
             "hailo",
             "compiler",
-            str(har_path),
+            str(optimized_har_path),
             "--hw-arch",
             HW_ARCH,
         ]
-        print(f"Running: {' '.join(COMPILE_CMD)} (cwd={compile_cwd})")
-        result = subprocess.run(COMPILE_CMD, cwd=str(compile_cwd))
+        print("Running:", " ".join(COMPILE_CMD))
+        result = subprocess.run(COMPILE_CMD)
         if result.returncode != 0:
             print(
-                f"WARNING: hailo compiler failed with exit code {result.returncode} for {har_path}",
+                f"WARNING: hailo compiler failed with exit code {result.returncode} for {optimized_har_path}",
                 file=sys.stderr,
             )
         else:
-            # The compiler should have created `<stem>.hef` in `compile_cwd`.
-            default_hef = compile_cwd / f"{stem}.hef"
-            if default_hef.is_file():
-                # Move/rename into our HEF_DIR
-                default_hef.replace(hef_path)
+            if local_hef_path.is_file():
+                local_hef_path.replace(hef_path)
                 print(f"Saved HEF to {hef_path}")
             else:
                 print(
-                    f"WARNING: Expected {default_hef} was not found after compilation.",
+                    f"WARNING: Expected {local_hef_path} was not found after compilation.",
                     file=sys.stderr,
                 )
 
