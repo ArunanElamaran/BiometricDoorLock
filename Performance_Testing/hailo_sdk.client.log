@@ -1,0 +1,63 @@
+2026-03-12 16:10:43,631 - INFO - main.py:34 - Current Time: 16:10:43, 03/12/26
+2026-03-12 16:10:44,640 - INFO - main.py:46 - CPU: Architecture: x86_64, Model: Intel(R) Core(TM) i5-5287U CPU @ 2.90GHz, Number Of Cores: 4, Utilization: 3.0%
+2026-03-12 16:10:44,641 - INFO - main.py:50 - Memory: Total: 7GB, Available: 4GB
+2026-03-12 16:10:44,641 - INFO - main.py:54 - System info: OS: Linux, Kernel: 6.17.0-14-generic
+2026-03-12 16:10:44,642 - INFO - main.py:55 - Hailo DFC Version: 3.33.0
+2026-03-12 16:10:44,643 - INFO - main.py:60 - HailoRT Version: 4.23.0
+2026-03-12 16:10:44,651 - INFO - main.py:76 - PCIe: No Hailo PCIe device was found
+2026-03-12 16:10:44,652 - INFO - main.py:109 - Running `hailo parser onnx hailo_onnx/mlp_100000.onnx -y --hw-arch hailo8 --har-path hailo_work/mlp_100000.har`
+2026-03-12 16:10:44,719 - INFO - parser.py:158 - Translation started on ONNX model mlp_100000
+2026-03-12 16:10:51,196 - INFO - main.py:34 - Current Time: 16:10:51, 03/12/26
+2026-03-12 16:10:52,205 - INFO - main.py:46 - CPU: Architecture: x86_64, Model: Intel(R) Core(TM) i5-5287U CPU @ 2.90GHz, Number Of Cores: 4, Utilization: 2.8%
+2026-03-12 16:10:52,205 - INFO - main.py:50 - Memory: Total: 7GB, Available: 4GB
+2026-03-12 16:10:52,206 - INFO - main.py:54 - System info: OS: Linux, Kernel: 6.17.0-14-generic
+2026-03-12 16:10:52,207 - INFO - main.py:55 - Hailo DFC Version: 3.33.0
+2026-03-12 16:10:52,208 - INFO - main.py:60 - HailoRT Version: 4.23.0
+2026-03-12 16:10:52,215 - INFO - main.py:76 - PCIe: No Hailo PCIe device was found
+2026-03-12 16:10:52,216 - INFO - main.py:109 - Running `hailo optimize hailo_work/mlp_100000.har --hw-arch hailo8 --use-random-calib-set`
+2026-03-12 16:15:43,380 - INFO - main.py:34 - Current Time: 16:15:43, 03/12/26
+2026-03-12 16:15:44,389 - INFO - main.py:46 - CPU: Architecture: x86_64, Model: Intel(R) Core(TM) i5-5287U CPU @ 2.90GHz, Number Of Cores: 4, Utilization: 2.0%
+2026-03-12 16:15:44,389 - INFO - main.py:50 - Memory: Total: 7GB, Available: 4GB
+2026-03-12 16:15:44,389 - INFO - main.py:54 - System info: OS: Linux, Kernel: 6.17.0-14-generic
+2026-03-12 16:15:44,390 - INFO - main.py:55 - Hailo DFC Version: 3.33.0
+2026-03-12 16:15:44,392 - INFO - main.py:60 - HailoRT Version: 4.23.0
+2026-03-12 16:15:44,400 - INFO - main.py:76 - PCIe: No Hailo PCIe device was found
+2026-03-12 16:15:44,400 - INFO - main.py:109 - Running `hailo parser onnx hailo_onnx/mlp_20000.onnx -y --hw-arch hailo8 --har-path hailo_work/mlp_20000.har`
+2026-03-12 16:15:44,464 - INFO - parser.py:158 - Translation started on ONNX model mlp_20000
+2026-03-12 16:15:44,487 - INFO - parser.py:193 - Restored ONNX model mlp_20000 (completion time: 00:00:00.02)
+2026-03-12 16:15:44,527 - INFO - parser.py:216 - Extracted ONNXRuntime meta-data for Hailo model (completion time: 00:00:00.06)
+2026-03-12 16:15:44,578 - INFO - parser.py:366 - Start nodes mapped from original model: 'input': 'mlp_20000/input_layer1'.
+2026-03-12 16:15:44,578 - INFO - parser.py:367 - End nodes mapped from original model: 'node_Gemm_1'.
+2026-03-12 16:15:44,584 - INFO - parser.py:288 - Translation completed on ONNX model mlp_20000 (completion time: 00:00:00.12)
+2026-03-12 16:15:44,995 - INFO - client_runner.py:1881 - Saved HAR to: /home/bala-elamaran/Documents/aruan_proj/BiometricDoorLock/Performance_Testing/hailo_work/mlp_20000.har
+2026-03-12 16:15:51,150 - INFO - main.py:34 - Current Time: 16:15:51, 03/12/26
+2026-03-12 16:15:52,159 - INFO - main.py:46 - CPU: Architecture: x86_64, Model: Intel(R) Core(TM) i5-5287U CPU @ 2.90GHz, Number Of Cores: 4, Utilization: 2.5%
+2026-03-12 16:15:52,159 - INFO - main.py:50 - Memory: Total: 7GB, Available: 4GB
+2026-03-12 16:15:52,159 - INFO - main.py:54 - System info: OS: Linux, Kernel: 6.17.0-14-generic
+2026-03-12 16:15:52,160 - INFO - main.py:55 - Hailo DFC Version: 3.33.0
+2026-03-12 16:15:52,161 - INFO - main.py:60 - HailoRT Version: 4.23.0
+2026-03-12 16:15:52,171 - INFO - main.py:76 - PCIe: No Hailo PCIe device was found
+2026-03-12 16:15:52,172 - INFO - main.py:109 - Running `hailo optimize hailo_work/mlp_20000.har --hw-arch hailo8 --use-random-calib-set`
+2026-03-12 16:15:52,877 - IMPORTANT - sdk_backend.py:1133 - Starting Model Optimization
+2026-03-12 16:15:53,024 - WARNING - mo_config.py:168 - Reducing optimization level to 0 (the accuracy won't be optimized and compression won't be used) because there's no available GPU
+2026-03-12 16:15:53,024 - WARNING - mo_config.py:233 - Running model optimization with zero level of optimization is not recommended for production use and might lead to suboptimal accuracy results
+2026-03-12 16:15:53,025 - INFO - mo_script_parser.py:91 - Model received quantization params from the hn
+2026-03-12 16:15:53,384 - INFO - algorithm_base.py:149 - MatmulDecompose skipped
+2026-03-12 16:15:53,397 - INFO - algorithm_base.py:152 - Starting Mixed Precision
+2026-03-12 16:15:53,435 - INFO - algorithm_base.py:168 - Model Optimization Algorithm Mixed Precision is done (completion time is 00:00:00.04)
+2026-03-12 16:15:53,468 - INFO - algorithm_base.py:149 - LayerNorm Decomposition skipped
+2026-03-12 16:15:53,530 - INFO - algorithm_base.py:152 - Starting Statistics Collector
+2026-03-12 16:15:53,539 - INFO - stats_collection.py:89 - Using dataset with 64 entries for calibration
+2026-03-12 16:15:54,474 - INFO - algorithm_base.py:168 - Model Optimization Algorithm Statistics Collector is done (completion time is 00:00:00.93)
+2026-03-12 16:15:54,586 - INFO - algorithm_base.py:152 - Starting Fix zp_comp Encoding
+2026-03-12 16:15:54,587 - INFO - algorithm_base.py:168 - Model Optimization Algorithm Fix zp_comp Encoding is done (completion time is 00:00:00.00)
+2026-03-12 16:15:54,587 - INFO - algorithm_base.py:149 - Matmul Equalization skipped
+2026-03-12 16:15:54,588 - INFO - algorithm_base.py:152 - Starting MatmulDecomposeFix
+2026-03-12 16:15:54,589 - INFO - algorithm_base.py:168 - Model Optimization Algorithm MatmulDecomposeFix is done (completion time is 00:00:00.00)
+2026-03-12 16:15:55,161 - INFO - algorithm_base.py:149 - Finetune encoding skipped
+2026-03-12 16:15:55,163 - INFO - algorithm_base.py:149 - Bias Correction skipped
+2026-03-12 16:15:55,165 - INFO - algorithm_base.py:149 - Adaround skipped
+2026-03-12 16:15:55,170 - INFO - algorithm_base.py:149 - Quantization-Aware Fine-Tuning skipped
+2026-03-12 16:15:55,637 - INFO - algorithm_base.py:149 - Layer Noise Analysis skipped
+2026-03-12 16:15:56,189 - IMPORTANT - sdk_backend.py:1145 - Model Optimization is done
+2026-03-12 16:15:56,239 - INFO - client_runner.py:1881 - Saved HAR to: /home/bala-elamaran/Documents/aruan_proj/BiometricDoorLock/Performance_Testing/mlp_20000_optimized.har
