@@ -1,10 +1,20 @@
 #!/usr/bin/env python3
 """
-Batch-convert mlp_*.onnx → .hef for Hailo-8 / Hailo-8L using the Hailo SDK.
+Batch-convert mlp_*.onnx → .hef for Hailo-8L using the Hailo SDK (Dataflow Compiler).
 
-Examples:
-    python convert_onnx_to_hef.py
-    python convert_onnx_to_hef.py --remove
+This script is meant to run on an x86_64 Linux machine with the full Hailo SDK
+installed, NOT on the Raspberry Pi. It assumes you already have ONNX files such as:
+    hailo_onnx/mlp_20000.onnx, mlp_100000.onnx, ...
+
+The CLI commands below follow the RidgeRun \"Convert ONNX Models to Hailo8L\"
+guide and the Hailo SDK tools:
+
+1) Parse:     `hailo parser onnx <model.onnx> -y --hw-arch hailo8l --har-path <model.har>`
+2) Optimize:  `hailo optimize <model.har> --hw-arch hailo8l --use-random-calib-set`
+3) Compile:   `hailo compiler <model.har> --hw-arch hailo8l`
+
+You can switch to the Python `ClientRunner` API if you prefer, but this script
+sticks to the documented CLI flow.
 """
 
 import argparse
@@ -13,52 +23,61 @@ import sys
 from pathlib import Path
 
 ONNX_DIR = Path("hailo_onnx")
-WORK_DIR = Path("hailo_work")      # holds parsed .har files
-HEF_DIR = Path("hailo_hefs")       # final .hef output
-HW_ARCH = "hailo8"                 # use "hailo8" for Hailo-8, "hailo8l" for Hailo-8L
+WORK_DIR = Path("hailo_work")          # holds .har and intermediate files
+HEF_DIR = Path("hailo_hefs")           # final .hef output
+HW_ARCH = "hailo8"                    # AI HAT+ / Hailo-8L target
 
 
-def run(cmd: list[str]) -> int:
+def run(cmd: list[str]) -> None:
     print("Running:", " ".join(cmd))
     result = subprocess.run(cmd)
     if result.returncode != 0:
         print(f"WARNING: command failed with exit code {result.returncode}", file=sys.stderr)
-    return result.returncode
-
-
-def remove_if_exists(path: Path) -> None:
-    if path.exists():
-        print(f"Removing old file: {path}")
-        path.unlink()
-
-
-def cleanup_previous_outputs(stem: str) -> None:
-    """
-    Remove files from previous runs for this model.
-    """
-    har_path = WORK_DIR / f"{stem}.har"
-    optimized_har_path = Path(f"{stem}_optimized.har")
-    local_hef_path = Path(f"{stem}.hef")
-    final_hef_path = HEF_DIR / f"{stem}.hef"
-
-    remove_if_exists(har_path)
-    remove_if_exists(optimized_har_path)
-    remove_if_exists(local_hef_path)
-    remove_if_exists(final_hef_path)
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--remove",
-        action="store_true",
-        help="Remove previously generated HAR/optimized HAR/HEF files before processing each model.",
-    )
-    return parser.parse_args()
 
 
 def main() -> None:
-    args = parse_args()
+    parser = argparse.ArgumentParser(
+        description="Batch-convert mlp_*.onnx models to HEF for Hailo devices."
+    )
+    parser.add_argument(
+        "--remove",
+        action="store_true",
+        help=(
+            "Delete existing HEF/HAR artifacts before compiling. "
+            "Equivalent to running: "
+            "'rm -f hailo_hefs/*.hef hailo_work/*.har *_optimized.har'."
+        ),
+    )
+    args = parser.parse_args()
+
+    if args.remove:
+        # Mimic:
+        #   rm -f hailo_hefs/*.hef
+        #   rm -f hailo_work/*.har
+        #   rm -f *_optimized.har
+        for path in HEF_DIR.glob("*.hef"):
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+        for path in WORK_DIR.glob("*.har"):
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+        for path in Path(".").glob("*_optimized.har"):
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+
+        for path in Path(".").glob("*.log"):
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+
+        print("Removed existing HEF and HAR artifacts.")
 
     if not ONNX_DIR.is_dir():
         print(f"ONNX directory not found: {ONNX_DIR}", file=sys.stderr)
@@ -73,22 +92,18 @@ def main() -> None:
         sys.exit(1)
 
     for onnx_path in onnx_files:
-        stem = onnx_path.stem
-        har_path = WORK_DIR / f"{stem}.har"
-        optimized_har_path = Path(f"{stem}_optimized.har")
-        local_hef_path = Path(f"{stem}.hef")
-        hef_path = HEF_DIR / f"{stem}.hef"
+        stem = onnx_path.stem                     # e.g. "mlp_20000"
+        har_path = WORK_DIR / f"{stem}.har"       # parsed / quantized
+        optimized_har_path = Path(f"{stem}_optimized.har")   # produced by hailo optimize
+        local_hef_path = Path(f"{stem}.hef")                 # produced by hailo compiler
+        hef_path = HEF_DIR / f"{stem}.hef"        # final executable
 
         print("=" * 80)
         print(f"Processing {onnx_path} → {hef_path}")
         print("=" * 80)
 
-        if args.remove:
-            cleanup_previous_outputs(stem)
-
-        # 1) Parse ONNX -> HAR
         if not har_path.exists():
-            parse_cmd = [
+            PARSE_CMD = [
                 "hailo",
                 "parser",
                 "onnx",
@@ -99,13 +114,11 @@ def main() -> None:
                 "--har-path",
                 str(har_path),
             ]
-            if run(parse_cmd) != 0:
-                continue
+            run(PARSE_CMD)
         else:
             print(f"{har_path} already exists, skipping parse step.")
 
-        # 2) Optimize HAR -> optimized HAR
-        optimize_cmd = [
+        OPTIMIZE_CMD = [
             "hailo",
             "optimize",
             str(har_path),
@@ -113,29 +126,38 @@ def main() -> None:
             HW_ARCH,
             "--use-random-calib-set",
         ]
-        if run(optimize_cmd) != 0:
-            continue
+        run(OPTIMIZE_CMD)
 
         if not optimized_har_path.is_file():
-            print(f"WARNING: Expected optimized HAR was not found: {optimized_har_path}", file=sys.stderr)
+            print(
+                f"WARNING: Expected optimized HAR was not found: {optimized_har_path}",
+                file=sys.stderr,
+            )
             continue
 
-        # 3) Compile optimized HAR -> HEF
-        compile_cmd = [
+        COMPILE_CMD = [
             "hailo",
             "compiler",
             str(optimized_har_path),
             "--hw-arch",
             HW_ARCH,
         ]
-        if run(compile_cmd) != 0:
-            continue
-
-        if local_hef_path.is_file():
-            local_hef_path.replace(hef_path)
-            print(f"Saved HEF to {hef_path}")
+        print("Running:", " ".join(COMPILE_CMD))
+        result = subprocess.run(COMPILE_CMD)
+        if result.returncode != 0:
+            print(
+                f"WARNING: hailo compiler failed with exit code {result.returncode} for {optimized_har_path}",
+                file=sys.stderr,
+            )
         else:
-            print(f"WARNING: Expected {local_hef_path} was not found after compilation.", file=sys.stderr)
+            if local_hef_path.is_file():
+                local_hef_path.replace(hef_path)
+                print(f"Saved HEF to {hef_path}")
+            else:
+                print(
+                    f"WARNING: Expected {local_hef_path} was not found after compilation.",
+                    file=sys.stderr,
+                )
 
     print("\nDone. HEF files should now be in:", HEF_DIR.resolve())
 
