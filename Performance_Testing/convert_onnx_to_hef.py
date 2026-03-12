@@ -6,8 +6,15 @@ This script is meant to run on an x86_64 Linux machine with the full Hailo SDK
 installed, NOT on the Raspberry Pi. It assumes you already have ONNX files such as:
     hailo_onnx/mlp_20000.onnx, mlp_100000.onnx, ...
 
-You MUST adapt the CLI commands (PARSE_CMD, OPTIMIZE_CMD, COMPILE_CMD) to match
-the exact DFC tools/options for your SDK, following Hailo’s docs / the RidgeRun article.
+The CLI commands below follow the RidgeRun \"Convert ONNX Models to Hailo8L\"
+guide and the Hailo SDK tools:
+
+1) Parse:     `hailo parser onnx <model.onnx> -y --hw-arch hailo8l --har-path <model.har>`
+2) Optimize:  `hailo optimize <model.har> --hw-arch hailo8l --use-random-calib-set`
+3) Compile:   `hailo compiler <model.har> --hw-arch hailo8l`
+
+You can switch to the Python `ClientRunner` API if you prefer, but this script
+sticks to the documented CLI flow.
 """
 
 import subprocess
@@ -51,20 +58,21 @@ def main() -> None:
 
         # ------------------------------------------------------------------
         # 1) PARSE: ONNX → HAR (unquantized)
-        # Replace this with the exact DFC CLI or Python wrapper from your SDK.
-        # Example CLI shape (NOT exact – check your docs):
-        #
-        #   hailoc translate-onnx \
-        #       --model {onnx_path} \
-        #       --output-har {har_path} \
-        #       --hw-arch {HW_ARCH}
+        # Per RidgeRun / Hailo docs:
+        #   hailo parser onnx models/yolov5m_vehicles.onnx -y --hw-arch hailo8l --har-path models/yolov5m_vehicles.har
+        # We adapt it to our paths and filenames.
         # ------------------------------------------------------------------
         if not har_path.exists():
             PARSE_CMD = [
-                "hailoc", "translate-onnx",
-                "--model", str(onnx_path),
-                "--output-har", str(har_path),
-                "--hw-arch", HW_ARCH,
+                "hailo",
+                "parser",
+                "onnx",
+                str(onnx_path),
+                "-y",
+                "--hw-arch",
+                HW_ARCH,
+                "--har-path",
+                str(har_path),
             ]
             run(PARSE_CMD)
         else:
@@ -72,44 +80,57 @@ def main() -> None:
 
         # ------------------------------------------------------------------
         # 2) OPTIMIZE / QUANTIZE: HAR → quantized HAR
-        # Some SDKs do this in-place on the HAR; others write a new HAR.
-        # You can either:
-        #   - Use a real calibration set, OR
-        #   - Use the SDK's "random calibration" option for these synthetic MLPs,
-        #     as mentioned in the RidgeRun article.
-        #
-        # Example CLI shape (NOT exact – check your docs):
-        #
-        #   hailoc optimize \
-        #       --har {har_path} \
-        #       --hw-arch {HW_ARCH} \
-        #       --use-random-calib-set
+        # The article shows (with real calib + model script):
+        #   hailo optimize yolov5m_vehicles.har --hw-arch hailo8l --calib-set-path ./calib_set.npy --model-script default_model_script.all
+        # For our synthetic MLPs, we use the documented `--use-random-calib-set`
+        # option instead of a real calibration dataset.
         # ------------------------------------------------------------------
         OPTIMIZE_CMD = [
-            "hailoc", "optimize",
-            "--har", str(har_path),
-            "--hw-arch", HW_ARCH,
+            "hailo",
+            "optimize",
+            str(har_path),
+            "--hw-arch",
+            HW_ARCH,
             "--use-random-calib-set",
         ]
         run(OPTIMIZE_CMD)
 
         # ------------------------------------------------------------------
         # 3) COMPILE: quantized HAR → HEF
-        #
-        # Example CLI shape (NOT exact – check your docs):
-        #
-        #   hailoc compile \
-        #       --har {har_path} \
-        #       --hw-arch {HW_ARCH} \
-        #       --output {hef_path}
+        # The article shows:
+        #   hailo compiler yolov5m_vehicles.har --hw-arch hailo8l
+        # which produces `<name>.hef` in the working directory. Here we let
+        # the compiler create the default `<stem>.hef` next to `har_path`,
+        # and then move/rename it into HEF_DIR.
         # ------------------------------------------------------------------
+        # Run compiler in the HAR directory so the output `.hef` lands there.
+        compile_cwd = har_path.parent
         COMPILE_CMD = [
-            "hailoc", "compile",
-            "--har", str(har_path),
-            "--hw-arch", HW_ARCH,
-            "--output", str(hef_path),
+            "hailo",
+            "compiler",
+            str(har_path),
+            "--hw-arch",
+            HW_ARCH,
         ]
-        run(COMPILE_CMD)
+        print(f"Running: {' '.join(COMPILE_CMD)} (cwd={compile_cwd})")
+        result = subprocess.run(COMPILE_CMD, cwd=str(compile_cwd))
+        if result.returncode != 0:
+            print(
+                f"WARNING: hailo compiler failed with exit code {result.returncode} for {har_path}",
+                file=sys.stderr,
+            )
+        else:
+            # The compiler should have created `<stem>.hef` in `compile_cwd`.
+            default_hef = compile_cwd / f"{stem}.hef"
+            if default_hef.is_file():
+                # Move/rename into our HEF_DIR
+                default_hef.replace(hef_path)
+                print(f"Saved HEF to {hef_path}")
+            else:
+                print(
+                    f"WARNING: Expected {default_hef} was not found after compilation.",
+                    file=sys.stderr,
+                )
 
     print("\nDone. HEF files should now be in:", HEF_DIR.resolve())
 
