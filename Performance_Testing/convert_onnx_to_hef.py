@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Batch-convert mlp_*.onnx → .hef for Hailo-8L using the Hailo SDK (Dataflow Compiler).
+Batch-convert .onnx → .hef for Hailo using the Hailo SDK (Dataflow Compiler).
 
-This script is meant to run on an x86_64 Linux machine with the full Hailo SDK
-installed, NOT on the Raspberry Pi. It assumes you already have ONNX files such as:
-    hailo_onnx/mlp_20000.onnx, mlp_100000.onnx, ...
+Runs on every .onnx file in the ONNX directory (default: hailo_onnx), or on a
+single file if --model is given. Meant for x86_64 Linux with the full Hailo SDK
+installed, NOT on the Raspberry Pi.
 
 The CLI commands below follow the RidgeRun \"Convert ONNX Models to Hailo8L\"
 guide and the Hailo SDK tools:
@@ -22,10 +22,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-ONNX_DIR = Path("hailo_onnx")
 WORK_DIR = Path("hailo_work")          # holds .har and intermediate files
 HEF_DIR = Path("hailo_hefs")           # final .hef output
-HW_ARCH = "hailo8"                    # AI HAT+ / Hailo-8L target
+HW_ARCH = "hailo8"                     # target device
+DEFAULT_ONNX_DIR = Path("hailo_onnx")  # default folder for ONNX files
 
 
 def run(cmd: list[str]) -> None:
@@ -37,7 +37,7 @@ def run(cmd: list[str]) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Batch-convert mlp_*.onnx models to HEF for Hailo devices."
+        description="Batch-convert .onnx models to HEF for Hailo devices."
     )
     parser.add_argument(
         "--remove",
@@ -48,7 +48,24 @@ def main() -> None:
             "'rm -f hailo_hefs/*.hef hailo_work/*.har *_optimized.har'."
         ),
     )
+    parser.add_argument(
+        "--onnx-dir",
+        type=str,
+        default=str(DEFAULT_ONNX_DIR),
+        help=f"Folder containing ONNX files (default: {DEFAULT_ONNX_DIR}).",
+    )
+    parser.add_argument(
+        "--model",
+        type=str,
+        default="",
+        help=(
+            "If set, convert only this exact ONNX filename (e.g. mlp_20000.onnx). "
+            "Lookup is in --onnx-dir (or default folder)."
+        ),
+    )
     args = parser.parse_args()
+
+    onnx_dir = Path(args.onnx_dir)
 
     if args.remove:
         # Mimic:
@@ -87,17 +104,24 @@ def main() -> None:
 
         print("Removed existing HEF and HAR artifacts from work/output folders and current directory.")
 
-    if not ONNX_DIR.is_dir():
-        print(f"ONNX directory not found: {ONNX_DIR}", file=sys.stderr)
+    if not onnx_dir.is_dir():
+        print(f"ONNX directory not found: {onnx_dir}", file=sys.stderr)
         sys.exit(1)
 
     WORK_DIR.mkdir(parents=True, exist_ok=True)
     HEF_DIR.mkdir(parents=True, exist_ok=True)
 
-    onnx_files = sorted(ONNX_DIR.glob("mlp_*.onnx"))
-    if not onnx_files:
-        print(f"No mlp_*.onnx files found in {ONNX_DIR}", file=sys.stderr)
-        sys.exit(1)
+    if args.model:
+        single = onnx_dir / args.model
+        if not single.is_file():
+            print(f"Model file not found: {single}", file=sys.stderr)
+            sys.exit(1)
+        onnx_files = [single]
+    else:
+        onnx_files = sorted(onnx_dir.glob("*.onnx"))
+        if not onnx_files:
+            print(f"No .onnx files found in {onnx_dir}", file=sys.stderr)
+            sys.exit(1)
 
     for onnx_path in onnx_files:
         stem = onnx_path.stem                             # e.g. "mlp_20000"
