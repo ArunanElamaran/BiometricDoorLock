@@ -185,7 +185,7 @@ def main() -> None:
         COMPILE_CMD = [
             "hailo",
             "compiler",
-            str(optimized_har_path),
+            optimized_har_path.name,
             "--hw-arch",
             HW_ARCH,
         ]
