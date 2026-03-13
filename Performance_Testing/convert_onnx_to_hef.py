@@ -28,13 +28,18 @@ HW_ARCH = "hailo8"                     # target device
 DEFAULT_ONNX_DIR = Path("hailo_onnx")  # default folder for ONNX files
 
 
-def remove_artifacts() -> None:
-    """Remove HEF/HAR artifacts from hailo_hefs, hailo_work, and cwd."""
-    for path in HEF_DIR.glob("*.hef"):
-        try:
-            path.unlink()
-        except FileNotFoundError:
-            pass
+def remove_artifacts(*, preserve_hef_dir: bool) -> None:
+    """
+    Remove HEF/HAR artifacts from hailo_work and cwd.
+
+    If preserve_hef_dir is False, also delete any existing HEFs in HEF_DIR.
+    """
+    if not preserve_hef_dir:
+        for path in HEF_DIR.glob("*.hef"):
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
     for path in WORK_DIR.glob("*.har"):
         try:
             path.unlink()
@@ -74,9 +79,9 @@ def main() -> None:
         "--remove",
         action="store_true",
         help=(
-            "Delete existing HEF/HAR artifacts before compiling. "
-            "Equivalent to running: "
-            "'rm -f hailo_hefs/*.hef hailo_work/*.har *_optimized.har'."
+            "Delete existing artifacts before compiling. "
+            "This removes existing HEFs in the output folder plus build artifacts in the work folder and "
+            "current directory."
         ),
     )
     parser.add_argument(
@@ -104,7 +109,7 @@ def main() -> None:
     onnx_dir = Path(args.onnx_dir)
 
     if args.remove:
-        remove_artifacts()
+        remove_artifacts(preserve_hef_dir=False)
         print("Removed existing HEF and HAR artifacts from work/output folders and current directory.")
 
     if not onnx_dir.is_dir():
@@ -199,8 +204,11 @@ def main() -> None:
     print("\nDone. HEF files should now be in:", HEF_DIR.resolve())
 
     if args.post_remove:
-        remove_artifacts()
-        print("Post-remove: cleaned HEF/HAR artifacts from work/output folders and current directory.")
+        remove_artifacts(preserve_hef_dir=True)
+        print(
+            "Post-remove: cleaned build artifacts from work folder and current directory "
+            "(preserved HEFs in output folder)."
+        )
 
 
 if __name__ == "__main__":
