@@ -13,7 +13,7 @@ import torch
 import torchaudio.transforms as T
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-DATA_DIR = SCRIPT_DIR / "ece113d_data"
+DATA_DIR = SCRIPT_DIR / "extra_ece113d_data"
 
 WORDS = ["open", "close"]
 RECORDINGS_PER_WORD = 5
