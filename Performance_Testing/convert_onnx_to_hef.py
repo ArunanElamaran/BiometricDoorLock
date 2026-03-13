@@ -161,12 +161,19 @@ def main() -> None:
         OPTIMIZE_CMD = [
             "hailo",
             "optimize",
-            str(har_path),
+            har_path.name,
             "--hw-arch",
             HW_ARCH,
             "--use-random-calib-set",
         ]
-        run(OPTIMIZE_CMD)
+        # Run optimize in WORK_DIR so the *_optimized.har artifact is created there.
+        print("Running:", " ".join(OPTIMIZE_CMD))
+        result = subprocess.run(OPTIMIZE_CMD, cwd=str(WORK_DIR))
+        if result.returncode != 0:
+            print(
+                f"WARNING: hailo optimize failed with exit code {result.returncode} for {har_path}",
+                file=sys.stderr,
+            )
 
         if not optimized_har_path.is_file():
             print(
