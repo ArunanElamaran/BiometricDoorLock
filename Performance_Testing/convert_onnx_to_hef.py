@@ -28,6 +28,37 @@ HW_ARCH = "hailo8"                     # target device
 DEFAULT_ONNX_DIR = Path("hailo_onnx")  # default folder for ONNX files
 
 
+def remove_artifacts() -> None:
+    """Remove HEF/HAR artifacts from hailo_hefs, hailo_work, and cwd."""
+    for path in HEF_DIR.glob("*.hef"):
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+    for path in WORK_DIR.glob("*.har"):
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+    for path in WORK_DIR.glob("*.log"):
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+    for path in WORK_DIR.glob("*.hef"):
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+    cwd = Path.cwd()
+    for ext in ("*.log", "*.har", "*.hef"):
+        for path in cwd.glob(ext):
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+
+
 def run(cmd: list[str]) -> None:
     print("Running:", " ".join(cmd))
     result = subprocess.run(cmd)
@@ -49,6 +80,11 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--post-remove",
+        action="store_true",
+        help="If --remove is also set, remove the same HEF/HAR artifacts again after conversion.",
+    )
+    parser.add_argument(
         "--onnx-dir",
         type=str,
         default=str(DEFAULT_ONNX_DIR),
@@ -68,40 +104,7 @@ def main() -> None:
     onnx_dir = Path(args.onnx_dir)
 
     if args.remove:
-        # Mimic:
-        #   rm -f hailo_hefs/*.hef
-        #   rm -f hailo_work/*.har
-        #   rm -f hailo_work/*_optimized.har
-        #   rm -f hailo_work/*_compiled.har (if created by tools)
-        for path in HEF_DIR.glob("*.hef"):
-            try:
-                path.unlink()
-            except FileNotFoundError:
-                pass
-        for path in WORK_DIR.glob("*.har"):
-            try:
-                path.unlink()
-            except FileNotFoundError:
-                pass
-        for path in WORK_DIR.glob("*.log"):
-            try:
-                path.unlink()
-            except FileNotFoundError:
-                pass
-        for path in WORK_DIR.glob("*.hef"):
-            try:
-                path.unlink()
-            except FileNotFoundError:
-                pass
-        # Also remove .log, .har, and .hef from the current working directory
-        cwd = Path.cwd()
-        for ext in ("*.log", "*.har", "*.hef"):
-            for path in cwd.glob(ext):
-                try:
-                    path.unlink()
-                except FileNotFoundError:
-                    pass
-
+        remove_artifacts()
         print("Removed existing HEF and HAR artifacts from work/output folders and current directory.")
 
     if not onnx_dir.is_dir():
@@ -194,6 +197,10 @@ def main() -> None:
                 )
 
     print("\nDone. HEF files should now be in:", HEF_DIR.resolve())
+
+    if args.post_remove:
+        remove_artifacts()
+        print("Post-remove: cleaned HEF/HAR artifacts from work/output folders and current directory.")
 
 
 if __name__ == "__main__":

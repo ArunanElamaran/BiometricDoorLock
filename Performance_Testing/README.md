@@ -39,7 +39,8 @@ Converts ONNX → HEF for Hailo (parse → optimize → compile). Run on x86 wit
 |------|----------|-------------|
 | `--onnx-dir DIR` | no | Folder with ONNX files (default: `hailo_onnx`). |
 | `--model FILE` | no | Convert only this ONNX (e.g. `mlp_20000.onnx`). Default: all `*.onnx` in `--onnx-dir`. |
-| `--remove` | no | Delete existing HEF/HAR in `hailo_hefs/`, `hailo_work/` and cwd before running. |
+| `--remove` | no | Delete existing HEF/HAR/.log in `hailo_hefs/`, `hailo_work/` and cwd before running. |
+| `--post-remove` | no | After conversion, remove the same artifacts (`.hef`, `.har`, `.log`) from those locations. |
 
 **Examples**
 
@@ -47,6 +48,7 @@ Converts ONNX → HEF for Hailo (parse → optimize → compile). Run on x86 wit
 python convert_onnx_to_hef.py
 python convert_onnx_to_hef.py --onnx-dir my_onnx --model mlp_20000.onnx
 python convert_onnx_to_hef.py --remove
+python convert_onnx_to_hef.py --remove --post-remove
 ```
 
 ---
