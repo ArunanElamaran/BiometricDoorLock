@@ -480,14 +480,19 @@ class ImagePreprocessor:
             Aligned face as BGR numpy array, or None if camera fails or no stable face detected.
         """
         last_aligned_face = None
-        for _frame, aligned_face, _bbox, _le, _re, count in self.capture_aligned_face_frames(
+        gen = self.capture_aligned_face_frames(
             camera_index=camera_index,
             stability_frames=stability_frames,
             position_threshold=position_threshold,
             use_picamera=use_picamera,
-        ):
-            if aligned_face is not None:
-                last_aligned_face = aligned_face
-            if count >= stability_frames:
-                break
+        )
+        try:
+            for _frame, aligned_face, _bbox, _le, _re, count in gen:
+                if aligned_face is not None:
+                    last_aligned_face = aligned_face
+                if count >= stability_frames:
+                    break
+        finally:
+            # Ensure camera resources are released immediately (important for picamera2).
+            gen.close()
         return last_aligned_face
