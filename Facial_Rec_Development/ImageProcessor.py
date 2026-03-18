@@ -185,7 +185,7 @@ class ImagePreprocessor:
         # If we don't have exactly two eyes, fall back to returning the raw face crop
         # (no alignment) so downstream can still use the detected face.
         if len(eyes) != 2:
-            return img_face, face_bbox, None, None
+            return cv2.cvtColor(img_face, cv2.COLOR_BGR2RGB), face_bbox, None, None
 
         # ------ Left and right eye ------
         eye_1 = (eyes[0][0], eyes[0][1], eyes[0][2], eyes[0][3])
@@ -200,7 +200,7 @@ class ImagePreprocessor:
         left_eye_center_y = left_eye[1] + (left_eye[3] / 2)
         right_eye_center_y = right_eye[1] + (right_eye[3] / 2)
         if abs(left_eye_center_y - right_eye_center_y) > (face_h / 4):
-            return img_face, face_bbox, None, None
+            return cv2.cvtColor(img_face, cv2.COLOR_BGR2RGB), face_bbox, None, None
 
         # Reject if the two eye boxes overlap
         lx1, ly1, lw, lh = left_eye[0], left_eye[1], left_eye[2], left_eye[3]
@@ -208,7 +208,7 @@ class ImagePreprocessor:
         overlap_x = max(0, min(lx1 + lw, rx1 + rw) - max(lx1, rx1))
         overlap_y = max(0, min(ly1 + lh, ry1 + rh) - max(ly1, ry1))
         if overlap_x > 0 and overlap_y > 0:
-            return img_face, face_bbox, None, None
+            return cv2.cvtColor(img_face, cv2.COLOR_BGR2RGB), face_bbox, None, None
 
         # ------ Left and right eye center ------
         left_eye_center = (
@@ -236,7 +236,7 @@ class ImagePreprocessor:
         c = _euclidean_distance(right_eye_center, point_3rd)
         # Reject degenerate case: coincident eyes or point_3rd same as eye (would divide by zero)
         if b < 1e-6 or c < 1e-6:
-            return img_face, face_bbox, None, None
+            return cv2.cvtColor(img_face, cv2.COLOR_BGR2RGB), face_bbox, None, None
         cos_a = (b * b + c * c - a * a) / (2 * b * c)
         angle = np.arccos(np.clip(cos_a, -1.0, 1.0))
         angle_deg = (angle * 180) / math.pi
@@ -315,7 +315,8 @@ class ImagePreprocessor:
         right_eye_abs = (face_x + right_eye[0], face_y + right_eye[1], right_eye[2], right_eye[3])
 
         # Return the rotated, aligned face, face bounding box, and eye coordinates for facial recognition
-        return new_img, face_bbox, left_eye_abs, right_eye_abs
+        new_img_rgb = cv2.cvtColor(new_img, cv2.COLOR_BGR2RGB)
+        return new_img_rgb, face_bbox, left_eye_abs, right_eye_abs
 
     def _array_to_tensor(self, img_bgr: np.ndarray) -> torch.Tensor:
         """Convert BGR numpy array to normalized tensor [1, 3, image_size, image_size]."""
