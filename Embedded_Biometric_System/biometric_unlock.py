@@ -102,11 +102,20 @@ class BiometricUnlock:
                 if self.voice_system:
                     import sounddevice as sd
                     import soundfile as sf
+                    import torch
+                    import torchaudio.transforms as T
+                    # Many USB mics only support 44100/48000 Hz; model expects 16 kHz
+                    record_rate, target_rate = 44100, 16000
                     ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
                     tmp_path = str(PROJECT_ROOT / f"clip_{ts}.wav")
-                    rec = sd.rec(int(3 * 16000), samplerate=16000, channels=1)
+                    rec = sd.rec(int(3 * record_rate), samplerate=record_rate, channels=1)
                     sd.wait()
-                    sf.write(tmp_path, rec, 16000)
+                    if record_rate != target_rate:
+                        resampler = T.Resample(record_rate, target_rate)
+                        rec_16k = resampler(torch.from_numpy(rec).float().T.unsqueeze(0)).squeeze().numpy()
+                    else:
+                        rec_16k = rec
+                    sf.write(tmp_path, rec_16k, target_rate)
                     try:
                         speaker, confidence, _ = self.voice_system.predict(tmp_path)
                         print(f"Voice: {speaker} ({confidence:.1%})")

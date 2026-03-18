@@ -2,3 +2,5 @@ ece113d_data/
 __pycache__/
 final/
 *.pt
+tmp_test.wav
+.DS_Store
