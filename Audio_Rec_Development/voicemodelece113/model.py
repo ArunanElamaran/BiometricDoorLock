@@ -49,7 +49,10 @@ class AudioPreprocessor:
     
     def load_audio(self, path: str) -> torch.Tensor:
         """Load audio file (supports mp4, wav, mp3, etc.)"""
-        waveform, sr = torchaudio.load(path)
+        # Use soundfile/ffmpeg backend to avoid torchcodec (not on Raspberry Pi/ARM)
+        ext = Path(path).suffix.lower()
+        backend = "soundfile" if ext in (".wav", ".flac", ".ogg") else "ffmpeg"
+        waveform, sr = torchaudio.load(path, backend=backend)
         
         # Convert to mono if stereo
         if waveform.shape[0] > 1:
