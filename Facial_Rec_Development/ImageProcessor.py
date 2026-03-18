@@ -240,11 +240,8 @@ class ImagePreprocessor:
         ]
 
         # Rotate the expanded region
-        # PIL expects RGB; OpenCV frames here are BGR.
-        img_expanded_rgb = cv2.cvtColor(img_expanded, cv2.COLOR_BGR2RGB)
-        img_expanded_pil = Image.fromarray(img_expanded_rgb)
-        img_rotated_rgb = np.array(img_expanded_pil.rotate(direction * angle_deg))
-        img_rotated = cv2.cvtColor(img_rotated_rgb, cv2.COLOR_RGB2BGR)
+        img_expanded_pil = Image.fromarray(img_expanded)
+        img_rotated = np.array(img_expanded_pil.rotate(direction * angle_deg))
 
         # Calculate the center of the rotated image and crop back to original face size
         # The center of the rotated expanded region corresponds to the center of the original face
