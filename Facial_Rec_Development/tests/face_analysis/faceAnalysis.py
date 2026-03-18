@@ -10,6 +10,9 @@ Facial detection using OpenCV:
 
 import math
 import sys
+import argparse
+import time
+from datetime import datetime
 from pathlib import Path
 
 import cv2
@@ -346,6 +349,27 @@ def resize_aligned_face(aligned_face, target_size):
 
 ########################################################
 
+def _save_aligned_face_to_database(aligned_face: np.ndarray, database_dir: Path, person_name: str, idx: int) -> Path:
+    """
+    Save an aligned face image (numpy array) into the on-device database layout:
+        database/<person_name>/*.jpg
+    """
+    if aligned_face is None:
+        raise ValueError("aligned_face is None")
+    if not person_name or not person_name.strip():
+        raise ValueError("person_name must be non-empty")
+
+    person_dir = database_dir / person_name.strip()
+    person_dir.mkdir(parents=True, exist_ok=True)
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    out_path = person_dir / f"aligned_{ts}_{idx:04d}.jpg"
+    ok = cv2.imwrite(str(out_path), aligned_face)
+    if not ok:
+        raise RuntimeError(f"Failed to write image to {out_path}")
+    return out_path
+
+
 def camera_test():
     # Check if system can detect camera and what is the source number
     cams_test = 10
@@ -383,7 +407,55 @@ def realtime_video_analysis(
     cv2.destroyAllWindows()
 
 if __name__ == "__main__":
-    
+    parser = argparse.ArgumentParser(description="Face analysis / aligned-face capture utility.")
+    parser.add_argument(
+        "--enroll",
+        action="store_true",
+        help="When set, capture and save aligned faces into the on-device database.",
+    )
+    parser.add_argument(
+        "--enroll-user",
+        type=str,
+        default=None,
+        help="Person name to save images under (database/<name>/...). Required if --enroll is set.",
+    )
+    parser.add_argument(
+        "--enroll-count",
+        type=int,
+        default=10,
+        help="Number of aligned face images to capture when --enroll is set.",
+    )
+    parser.add_argument(
+        "--database-dir",
+        type=str,
+        default=None,
+        help="Override database directory (default: Facial_Rec_Development/database).",
+    )
+    parser.add_argument(
+        "--camera-index",
+        type=int,
+        default=0,
+        help="Camera index to use (default: 0).",
+    )
+    parser.add_argument(
+        "--no-preview",
+        action="store_true",
+        help="Disable the live preview window while capturing.",
+    )
+    parser.add_argument(
+        "--stability-frames",
+        type=int,
+        default=5,
+        help="Consecutive stable frames required to accept a capture.",
+    )
+    parser.add_argument(
+        "--position-threshold",
+        type=float,
+        default=0.15,
+        help="Stability threshold as fraction of face size.",
+    )
+    args = parser.parse_args()
+
     # 1. Initial testing with a static image
     # plain_static_image_analysis(img_path='../database/Obama/img1.jpg')
 
@@ -412,19 +484,60 @@ if __name__ == "__main__":
         except Exception:
             use_picamera = False
 
-    aligned_face = capture_aligned_face_from_camera(use_picamera=use_picamera)
-    if aligned_face is None:
-        print("face not detected properly")
-        exit()
-    # Show the captured face on laptops/desktop sessions.
-    # Suppress OpenCV windows only for headless Linux (common when SSH'd into a Pi).
-    show_windows = True
-    if platform.system().lower() == "linux" and not os.environ.get("DISPLAY"):
-        show_windows = False
-    if show_windows:
-        cv2.imshow('aligned_face', aligned_face)
-        cv2.waitKey(0)
-        cv2.destroyAllWindows()
-    print(f"Size of aligned face: {aligned_face.shape}")
-    resized_face = resize_aligned_face(aligned_face, (160, 160))  # For Facenet
-    print(f"Size of resized face: {resized_face.shape}")
+    # Resolve database directory (defaults to the tests database folder in this repo)
+    default_db_dir = _repo_root / "Facial_Rec_Development" / "database"
+    database_dir = Path(args.database_dir).expanduser().resolve() if args.database_dir else default_db_dir
+
+    if args.enroll:
+        if args.enroll_user is None or not args.enroll_user.strip():
+            raise SystemExit("--enroll-user is required when --enroll is set")
+        if args.enroll_count <= 0:
+            raise SystemExit("--enroll-count must be > 0")
+
+        print(f"Enrollment mode: saving {args.enroll_count} aligned face image(s) to {database_dir / args.enroll_user.strip()}")
+        saved = 0
+        attempts = 0
+        while saved < args.enroll_count:
+            attempts += 1
+            aligned_face = capture_aligned_face_from_camera(
+                camera_index=args.camera_index,
+                display_preview=(not args.no_preview),
+                stability_frames=args.stability_frames,
+                position_threshold=args.position_threshold,
+                use_picamera=use_picamera,
+            )
+            # The saved images are the direct output/result of the aligned-face capture.
+            if aligned_face is None:
+                print("face not detected properly; retrying...")
+                continue
+
+            out_path = _save_aligned_face_to_database(aligned_face, database_dir, args.enroll_user, saved + 1)
+            saved += 1
+            print(f"[{saved}/{args.enroll_count}] Saved: {out_path}")
+            # Small pause so consecutive captures aren't identical
+            time.sleep(1)
+
+        print(f"Done. Captured {saved} image(s) in {attempts} attempt(s).")
+    else:
+        aligned_face = capture_aligned_face_from_camera(
+            camera_index=args.camera_index,
+            display_preview=(not args.no_preview),
+            stability_frames=args.stability_frames,
+            position_threshold=args.position_threshold,
+            use_picamera=use_picamera,
+        )
+        if aligned_face is None:
+            print("face not detected properly")
+            exit()
+        # Show the captured face on laptops/desktop sessions.
+        # Suppress OpenCV windows only for headless Linux (common when SSH'd into a Pi).
+        show_windows = True
+        if platform.system().lower() == "linux" and not os.environ.get("DISPLAY"):
+            show_windows = False
+        if show_windows:
+            cv2.imshow('aligned_face', aligned_face)
+            cv2.waitKey(0)
+            cv2.destroyAllWindows()
+        print(f"Size of aligned face: {aligned_face.shape}")
+        resized_face = resize_aligned_face(aligned_face, (160, 160))  # For Facenet
+        print(f"Size of resized face: {resized_face.shape}")
