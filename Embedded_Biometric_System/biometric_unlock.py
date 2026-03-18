@@ -149,6 +149,7 @@ class BiometricUnlock:
                     print("User unidentifiable.")
                 else:
                     # Delegate handling of a successful identification to the unlock logic.
+                    print(f"Face id: {person}\nVoice id: {speaker}")
                     self.lcd_display.send_message(f"Face id: {person}\nVoice id: {speaker}")
                     # self._unlock(person)
                 time.sleep(3)
