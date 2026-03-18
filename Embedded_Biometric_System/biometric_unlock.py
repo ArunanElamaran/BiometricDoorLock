@@ -91,29 +91,36 @@ class BiometricUnlock:
         Run the voice recognition model on the current audio segment.
         Returns the predicted user id/name if confident, else None.
         """
-        if self.voice_system:
-            import sounddevice as sd
-            import soundfile as sf
-            import torch
-            import torchaudio.transforms as T
-            record_rate, target_rate = 48000, 16000
-            ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            tmp_path = str(PROJECT_ROOT / f"clip_{ts}.wav")
-            rec = sd.rec(int(3 * record_rate), samplerate=record_rate, channels=1)
-            sd.wait()
-            if record_rate != target_rate:
-                resampler = T.Resample(record_rate, target_rate)
-                rec_16k = resampler(torch.from_numpy(rec).float().T.unsqueeze(0)).squeeze().numpy()
-            else:
-                rec_16k = rec
-            sf.write(tmp_path, rec_16k, target_rate)
-            try:
-                speaker, confidence, _ = self.voice_system.predict(tmp_path)
-                print(f"Voice: {speaker} ({confidence:.1%})")
-                return speaker, confidence
-            except Exception as e:  # noqa: BLE001
-                print(f"Warning: failed to run voice model: {e}")
-                return None, None
+        if not self.voice_system:
+            print("Warning: voice model not loaded; skipping voice authentication.")
+            return None, None
+
+        import sounddevice as sd
+        import soundfile as sf
+        import torch
+        import torchaudio.transforms as T
+
+        record_rate, target_rate = 48000, 16000
+        ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        tmp_path = str(PROJECT_ROOT / f"clip_{ts}.wav")
+
+        rec = sd.rec(int(3 * record_rate), samplerate=record_rate, channels=1)
+        sd.wait()
+
+        if record_rate != target_rate:
+            resampler = T.Resample(record_rate, target_rate)
+            rec_16k = resampler(torch.from_numpy(rec).float().T.unsqueeze(0)).squeeze().numpy()
+        else:
+            rec_16k = rec
+
+        sf.write(tmp_path, rec_16k, target_rate)
+        try:
+            speaker, confidence, _ = self.voice_system.predict(tmp_path)
+            print(f"Voice: {speaker} ({confidence:.1%})")
+            return speaker, confidence
+        except Exception as e:  # noqa: BLE001
+            print(f"Warning: failed to run voice model: {e}")
+            return None, None
 
     def run_biometric_auth_loop(self, threshold: float = 0.7, use_pi_camera: bool = False) -> None:
         """
