@@ -44,97 +44,49 @@ class _FaceDataset(Dataset):
 
 class LightweightFaceNet(nn.Module):
     """
-    VGG-style face network (input 224x224) mirroring the provided Keras
-    Sequential architecture:
-
-        - Five conv blocks with 64, 128, 256, 512, 512 channels
-        - Max pooling between blocks
-        - Conv(4096, 7x7) -> Dropout
-        - Conv(4096, 1x1) -> Dropout
-        - Conv(num_persons, 1x1) -> Flatten -> logits
-
-    For compatibility with the rest of the code, this class still exposes
-    num_persons and get_embedding(). The embedding is taken from the
-    penultimate 4096-channel conv layer before the final classifier.
+    VGG-style face network (input 224x224).
+    Same interface as your project: num_persons, embedding_dim, forward(), get_embedding().
     """
 
     def __init__(
         self,
         image_size: int = 224,
         num_persons: int = 5,
-        embedding_dim: int = 4096,
+        embedding_dim: int = 128,
     ):
         super().__init__()
         self.num_persons = num_persons
         self.embedding_dim = embedding_dim
 
-        # Convolutional backbone (VGG-like, using padding=1 instead of explicit ZeroPadding2D)
-        layers: list[nn.Module] = []
+        # 224 -> 112 -> 56 -> 28 -> 14 -> 7 with fewer channels
+        self.conv_blocks = nn.Sequential(
+            _make_conv_block(3, 32, 2),     # 224 -> 112
+            _make_conv_block(32, 64, 2),    # 112 -> 56
+            _make_conv_block(64, 128, 2),   # 56 -> 28
+            _make_conv_block(128, 256, 2),  # 28 -> 14 -> 7
+        )
 
-        def conv_block(in_c: int, out_c: int, num_convs: int):
-            block = []
-            for i in range(num_convs):
-                block.append(nn.Conv2d(in_c if i == 0 else out_c, out_c, kernel_size=3, padding=1))
-                block.append(nn.ReLU(inplace=True))
-            block.append(nn.MaxPool2d(kernel_size=2, stride=2))
-            return block
-
-        # Block 1: 64 filters, 2 convs
-        layers += conv_block(3, 64, 2)
-        # Block 2: 128 filters, 2 convs
-        layers += conv_block(64, 128, 2)
-        # Block 3: 256 filters, 3 convs
-        layers += conv_block(128, 256, 3)
-        # Block 4: 512 filters, 3 convs
-        layers += conv_block(256, 512, 3)
-        # Block 5: 512 filters, 3 convs
-        layers += conv_block(512, 512, 3)
-
-        self.features = nn.Sequential(*layers)
-
-        # Classifier head implemented as conv layers, like the Keras version.
-        # Input feature map after Block 5 for 224x224 is 7x7, so 7x7 conv acts as FC.
-        self.classifier_conv1 = nn.Conv2d(512, 4096, kernel_size=7)
-        self.classifier_relu1 = nn.ReLU(inplace=True)
-        self.classifier_drop1 = nn.Dropout(0.5)
-
-        self.classifier_conv2 = nn.Conv2d(4096, 4096, kernel_size=1)
-        self.classifier_relu2 = nn.ReLU(inplace=True)
-        self.classifier_drop2 = nn.Dropout(0.5)
-
-        self.classifier_conv3 = nn.Conv2d(4096, num_persons, kernel_size=1)
+        # Global pooling + small MLP head: 7x7x256 -> 256 -> embedding -> classifier
+        self.global_pool = nn.AdaptiveAvgPool2d((1, 1))
+        self.embedding_proj = nn.Sequential(
+            nn.Linear(256, embedding_dim),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.5),
+        )
+        self.classifier = nn.Linear(embedding_dim, num_persons)
 
     def forward(self, x: torch.Tensor, return_embedding: bool = False):
-        """
-        Args:
-            x: Face image [batch, 3, 224, 224]
-            return_embedding: If True, also return the 4096-dim embedding.
-
-        Returns:
-            logits: [batch, num_persons]
-            embedding (optional): [batch, 4096]
-        """
-        x = self.features(x)                           # [B, 512, 7, 7]
-        x = self.classifier_conv1(x)                  # [B, 4096, 1, 1]
-        x = self.classifier_relu1(x)
-        x = self.classifier_drop1(x)
-
-        x = self.classifier_conv2(x)                  # [B, 4096, 1, 1]
-        x = self.classifier_relu2(x)
-        x = self.classifier_drop2(x)
-
-        # Embedding is the flattened 4096 feature vector
-        emb = x.view(x.size(0), -1)                   # [B, 4096]
-
-        x = self.classifier_conv3(x)                  # [B, num_persons, 1, 1]
-        logits = x.view(x.size(0), -1)                # [B, num_persons]
-
+        # x: [batch, 3, 224, 224]
+        features = self.conv_blocks(x)              # [B, 256, 7, 7]
+        pooled = self.global_pool(features)         # [B, 256, 1, 1]
+        flat = pooled.view(pooled.size(0), -1)      # [B, 256]
+        emb = self.embedding_proj(flat)             # [B, embedding_dim]
+        logits = self.classifier(emb)
         if return_embedding:
             return logits, emb
         return logits
 
     def get_embedding(self, x: torch.Tensor) -> torch.Tensor:
-        """Extract 4096-dim face embedding (useful for verification)."""
         _, emb = self.forward(x, return_embedding=True)
         return emb
 
