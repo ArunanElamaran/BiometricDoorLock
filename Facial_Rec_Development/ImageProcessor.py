@@ -4,8 +4,9 @@ facial alignment (detect face + eyes, rotate to align eyes) for path or array in
 """
 
 import math
+import atexit
 from pathlib import Path
-from typing import Generator, Optional, Tuple
+from typing import Any, Generator, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -60,6 +61,50 @@ class ImagePreprocessor:
         )
         self._face_detector: Optional[cv2.CascadeClassifier] = None
         self._eye_detector: Optional[cv2.CascadeClassifier] = None
+        self._picam2: Optional[Any] = None
+        self._picam2_started: bool = False
+
+    def _get_picamera2(self) -> Any:
+        """
+        Lazily create and start a single Picamera2 instance.
+        Reusing a single instance avoids libcamera state errors on repeated init.
+        """
+        if self._picam2 is None:
+            from picamera2 import Picamera2  # type: ignore
+
+            self._picam2 = Picamera2()
+            try:
+                config = self._picam2.create_video_configuration(
+                    main={"format": "RGB888", "size": (640, 480)}
+                )
+            except Exception:  # noqa: BLE001
+                config = self._picam2.create_preview_configuration(
+                    main={"format": "RGB888", "size": (640, 480)}
+                )
+            self._picam2.configure(config)
+            atexit.register(self._stop_picamera2)
+
+        if not self._picam2_started:
+            self._picam2.start()
+            self._picam2_started = True
+        return self._picam2
+
+    def _stop_picamera2(self) -> None:
+        if self._picam2 is None:
+            return
+        try:
+            if self._picam2_started:
+                self._picam2.stop()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            close = getattr(self._picam2, "close", None)
+            if callable(close):
+                close()
+        except Exception:  # noqa: BLE001
+            pass
+        self._picam2_started = False
+        self._picam2 = None
 
     def _get_detectors(
         self,
@@ -350,20 +395,7 @@ class ImagePreprocessor:
         if use_picamera:
             # Use Raspberry Pi Camera Module via picamera2.
             try:
-                from picamera2 import Picamera2  # type: ignore
-
-                picam2 = Picamera2()
-                # Pick a common RGB format; support multiple picamera2 versions.
-                try:
-                    config = picam2.create_video_configuration(
-                        main={"format": "RGB888", "size": (640, 480)}
-                    )
-                except Exception:  # noqa: BLE001
-                    config = picam2.create_preview_configuration(
-                        main={"format": "RGB888", "size": (640, 480)}
-                    )
-                picam2.configure(config)
-                picam2.start()
+                picam2 = self._get_picamera2()
             except Exception as e:  # noqa: BLE001
                 # Fall back to OpenCV (e.g., when running on a development Mac or picamera2 is missing).
                 print(f"Warning: picamera2 unavailable; falling back to cv2 camera. ({e})")
@@ -452,11 +484,6 @@ class ImagePreprocessor:
                     previous_right_eye_center = None
                     yield frame, None, None, None, None, 0
         finally:
-            if picam2 is not None:
-                try:
-                    picam2.stop()
-                except Exception:  # noqa: BLE001
-                    pass
             if cap is not None:
                 cap.release()
 
