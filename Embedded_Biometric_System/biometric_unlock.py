@@ -147,7 +147,7 @@ class BiometricUnlock:
                 # Record 3 s from USB mic and run voice inference
                 self.lcd_display.send_message("Face detected\nRecording voice...")
                 speaker, confidence = self._run_voice_model()
-                self.lcd_display.send_message("Finished recording voice")
+                # self.lcd_display.send_message("Finished recording voice")
                 # speaker = "John Doe"
 
                 # Run the face model helper on the captured face.
@@ -158,7 +158,7 @@ class BiometricUnlock:
                 else:
                     # Delegate handling of a successful identification to the unlock logic.
                     print(f"Face id: {person}\nVoice id: {speaker}")
-                    self.lcd_display.send_message(f"Face id: {person}\nVoice id: {speaker}")
+                    self.lcd_display.send_message(f"F: {person} V: {speaker}\nM: {person == speaker}")
                     # self._unlock(person)
                 time.sleep(3)
 
@@ -191,7 +191,7 @@ def main() -> None:
 
     # Run continuous biometric authentication loop (Ctrl+C to stop).
     # Set use_pi_camera=True on Raspberry Pi to use picamera2; keep False on a Mac/PC.
-    unlock_system.run_biometric_auth_loop(threshold=0.7, use_pi_camera=False)
+    unlock_system.run_biometric_auth_loop(threshold=0.7, use_pi_camera=True)
 
 
 if __name__ == "__main__":
