@@ -37,10 +37,12 @@ class ImagePreprocessor:
         face_cascade_path: Optional[str] = None,
         eye_cascade_path: Optional[str] = None,
         face_box_expand: float = 0.2,  # Expand face box on all sides
+        min_face_size: int = 64,       # Minimum face bbox size (pixels) to be considered valid
     ):
         self.image_size = image_size
         self.normalize = normalize
         self.face_box_expand = face_box_expand
+        self.min_face_size = min_face_size
         self._transform = T.Compose([
             T.Resize((image_size, image_size)),
             T.ToTensor(),
@@ -102,6 +104,9 @@ class ImagePreprocessor:
 
         # ------ Face bounding box (expand equally on all four edges) ------
         face_x, face_y, face_w, face_h = faces[0]
+        # Reject faces that are too small to be reliable
+        if face_w < self.min_face_size or face_h < self.min_face_size:
+            return None, None, None, None
         expand_w = face_w * self.face_box_expand
         expand_h = face_h * self.face_box_expand
         face_x = int(face_x - expand_w)
@@ -131,9 +136,10 @@ class ImagePreprocessor:
             eyes_with_area.sort(key=lambda x: x[1], reverse=True)        # Sort by area, descending
             eyes = [eye for eye, _ in eyes_with_area[:2]]                  # Keep only the two largest
 
-        # Ensure we have at least 2 eyes, otherwise raise an error
-        if len(eyes) < 2:
-            return None, None, None, None
+        # If we don't have exactly two eyes, fall back to returning the raw face crop
+        # (no alignment) so downstream can still use the detected face.
+        if len(eyes) != 2:
+            return img_face, face_bbox, None, None
 
         # ------ Left and right eye ------
         eye_1 = (eyes[0][0], eyes[0][1], eyes[0][2], eyes[0][3])
@@ -143,13 +149,20 @@ class ImagePreprocessor:
         else:
             left_eye, right_eye = eye_2, eye_1
 
+        # If the eyes are separated too much vertically, the "eye line" is likely wrong.
+        # Fall back to the raw face crop (no alignment).
+        left_eye_center_y = left_eye[1] + (left_eye[3] / 2)
+        right_eye_center_y = right_eye[1] + (right_eye[3] / 2)
+        if abs(left_eye_center_y - right_eye_center_y) > (face_h / 4):
+            return img_face, face_bbox, None, None
+
         # Reject if the two eye boxes overlap
         lx1, ly1, lw, lh = left_eye[0], left_eye[1], left_eye[2], left_eye[3]
         rx1, ry1, rw, rh = right_eye[0], right_eye[1], right_eye[2], right_eye[3]
         overlap_x = max(0, min(lx1 + lw, rx1 + rw) - max(lx1, rx1))
         overlap_y = max(0, min(ly1 + lh, ry1 + rh) - max(ly1, ry1))
         if overlap_x > 0 and overlap_y > 0:
-            return None, None, None, None
+            return img_face, face_bbox, None, None
 
         # ------ Left and right eye center ------
         left_eye_center = (
@@ -177,7 +190,7 @@ class ImagePreprocessor:
         c = _euclidean_distance(right_eye_center, point_3rd)
         # Reject degenerate case: coincident eyes or point_3rd same as eye (would divide by zero)
         if b < 1e-6 or c < 1e-6:
-            return None, None, None, None
+            return img_face, face_bbox, None, None
         cos_a = (b * b + c * c - a * a) / (2 * b * c)
         angle = np.arccos(np.clip(cos_a, -1.0, 1.0))
         angle_deg = (angle * 180) / math.pi
@@ -349,40 +362,48 @@ class ImagePreprocessor:
                     face_size_avg = (face_w + face_h) / 2
                     threshold_distance = face_size_avg * position_threshold
 
-                    current_left_eye_center = (
-                        left_eye_abs[0] + left_eye_abs[2] / 2,
-                        left_eye_abs[1] + left_eye_abs[3] / 2,
-                    )
-                    current_right_eye_center = (
-                        right_eye_abs[0] + right_eye_abs[2] / 2,
-                        right_eye_abs[1] + right_eye_abs[3] / 2,
-                    )
+                    eyes_available = left_eye_abs is not None and right_eye_abs is not None
+                    if eyes_available:
+                        current_left_eye_center = (
+                            left_eye_abs[0] + left_eye_abs[2] / 2,
+                            left_eye_abs[1] + left_eye_abs[3] / 2,
+                        )
+                        current_right_eye_center = (
+                            right_eye_abs[0] + right_eye_abs[2] / 2,
+                            right_eye_abs[1] + right_eye_abs[3] / 2,
+                        )
 
                     if previous_face_center is not None:
                         center_distance = _euclidean_distance(
                             current_face_center, previous_face_center
                         )
-                        left_eye_distance = _euclidean_distance(
-                            current_left_eye_center, previous_left_eye_center
-                        )
-                        right_eye_distance = _euclidean_distance(
-                            current_right_eye_center, previous_right_eye_center
-                        )
-                        if (
-                            center_distance <= threshold_distance
-                            and left_eye_distance <= threshold_distance
-                            and right_eye_distance <= threshold_distance
-                        ):
+                        if eyes_available and previous_left_eye_center is not None and previous_right_eye_center is not None:
+                            left_eye_distance = _euclidean_distance(
+                                current_left_eye_center, previous_left_eye_center
+                            )
+                            right_eye_distance = _euclidean_distance(
+                                current_right_eye_center, previous_right_eye_center
+                            )
+                            is_stable = (
+                                center_distance <= threshold_distance
+                                and left_eye_distance <= threshold_distance
+                                and right_eye_distance <= threshold_distance
+                            )
+                        else:
+                            # Face-only stability fallback (no reliable eyes)
+                            is_stable = center_distance <= threshold_distance
+
+                        if is_stable:
                             stable_frame_count += 1
                         else:
                             stable_frame_count = 1
                             previous_face_center = current_face_center
-                            previous_left_eye_center = current_left_eye_center
-                            previous_right_eye_center = current_right_eye_center
+                            previous_left_eye_center = current_left_eye_center if eyes_available else None
+                            previous_right_eye_center = current_right_eye_center if eyes_available else None
                     else:
                         previous_face_center = current_face_center
-                        previous_left_eye_center = current_left_eye_center
-                        previous_right_eye_center = current_right_eye_center
+                        previous_left_eye_center = current_left_eye_center if eyes_available else None
+                        previous_right_eye_center = current_right_eye_center if eyes_available else None
                         stable_frame_count = 1
 
                     yield frame, aligned_face, face_bbox, left_eye_abs, right_eye_abs, stable_frame_count
