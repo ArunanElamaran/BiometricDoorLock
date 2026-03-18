@@ -73,7 +73,8 @@ class BiometricUnlock:
                 print(f"Warning: failed to load voice model: {e}")
 
         # Initialize LCD display
-        self.lcd_display = LCDUARTDisplay(port="/dev/cu.usbmodem1101")
+        # self.lcd_display = LCDUARTDisplay(port="/dev/cu.usbmodem1101")
+        self.lcd_display = LCDUARTDisplay(port="/dev/ttyACM0")
 
     def _run_face_model(self, aligned_face, threshold: float = 0.7):
         """
