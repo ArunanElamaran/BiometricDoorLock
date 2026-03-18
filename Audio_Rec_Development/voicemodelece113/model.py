@@ -48,11 +48,15 @@ class AudioPreprocessor:
         self.amplitude_to_db = T.AmplitudeToDB(stype='power', top_db=80)
     
     def load_audio(self, path: str) -> torch.Tensor:
-        """Load audio file (supports mp4, wav, mp3, etc.)"""
-        # Use soundfile/ffmpeg backend to avoid torchcodec (not on Raspberry Pi/ARM)
-        ext = Path(path).suffix.lower()
-        backend = "soundfile" if ext in (".wav", ".flac", ".ogg") else "ffmpeg"
-        waveform, sr = torchaudio.load(path, backend=backend)
+        """Load audio file (supports wav, flac, ogg, m4a, mp3 via soundfile/ffmpeg)."""
+        # Prefer soundfile to avoid torchcodec (not on Raspberry Pi/ARM)
+        try:
+            import soundfile as sf
+            data, sr = sf.read(path, dtype="float32", always_2d=True)
+            waveform = torch.from_numpy(data.T)  # [channels, samples]
+        except Exception:
+            # Fallback for m4a/mp3: torchaudio with ffmpeg backend (no torchcodec)
+            waveform, sr = torchaudio.load(path, backend="ffmpeg")
         
         # Convert to mono if stereo
         if waveform.shape[0] > 1:
