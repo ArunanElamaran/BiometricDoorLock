@@ -9,7 +9,7 @@ from model import VoiceRecognitionSystem, print_model_info
 # CONFIGURATION
 # ============================================================
 
-DATA_DIR = "/Users/sourishsaswade/repos/finalprojece113/ece113d_data"      # Folder containing speaker subfolders
+DATA_DIR = "./ece113d_data"      # Folder containing speaker subfolders
 OUTPUT_MODEL = "voice_model.pt" # Where to save the trained model
 NUM_SPEAKERS = 2
 DURATION_SEC = None  # None = use full file duration

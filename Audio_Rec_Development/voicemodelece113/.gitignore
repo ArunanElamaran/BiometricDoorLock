@@ -1,5 +1,6 @@
 ece113d_data/
 __pycache__/
 final/
+voice/
 tmp_test.wav
 .DS_Store
