@@ -5,6 +5,7 @@ Authentication runs on user input (e.g. button)
 
 from pathlib import Path
 import sys
+import time
 from datetime import datetime
 
 # Ensure project root is on sys.path so we can import Facial_Rec_Development
@@ -19,6 +20,8 @@ if str(AUDIO_REC_ROOT) not in sys.path:
 
 from Facial_Rec_Development.model import FaceRecognitionSystem
 from Facial_Rec_Development.ImageProcessor import ImagePreprocessor
+
+from lcd_uart_test import LCDUARTDisplay
 
 
 class BiometricUnlock:
@@ -69,6 +72,10 @@ class BiometricUnlock:
             except Exception as e:  # noqa: BLE001
                 print(f"Warning: failed to load voice model: {e}")
 
+        # Initialize LCD display
+        # self.lcd_display = LCDUARTDisplay(port="/dev/cu.usbmodem1101")
+        self.lcd_display = LCDUARTDisplay(port="/dev/ttyACM0")
+
     def _run_face_model(self, aligned_face, threshold: float = 0.7):
         """
         Run the face recognition model on an already aligned face crop.
@@ -79,7 +86,43 @@ class BiometricUnlock:
         # Single place where we call into FaceRecognitionSystem for identification.
         return self.face_system(aligned_face, threshold=threshold)
 
-    def run_biometric_auth_loop(self, threshold: float = 0.7) -> None:
+    def _run_voice_model(self):
+        """
+        Run the voice recognition model on the current audio segment.
+        Returns the predicted user id/name if confident, else None.
+        """
+        if not self.voice_system:
+            print("Warning: voice model not loaded; skipping voice authentication.")
+            return None, None
+
+        import sounddevice as sd
+        import soundfile as sf
+        import torch
+        import torchaudio.transforms as T
+
+        record_rate, target_rate = 48000, 16000
+        ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        tmp_path = str(PROJECT_ROOT / f"clip_{ts}.wav")
+
+        rec = sd.rec(int(3 * record_rate), samplerate=record_rate, channels=1)
+        sd.wait()
+
+        if record_rate != target_rate:
+            resampler = T.Resample(record_rate, target_rate)
+            rec_16k = resampler(torch.from_numpy(rec).float().T.unsqueeze(0)).squeeze().numpy()
+        else:
+            rec_16k = rec
+
+        sf.write(tmp_path, rec_16k, target_rate)
+        try:
+            speaker, confidence, _ = self.voice_system.predict(tmp_path)
+            print(f"Voice: {speaker} ({confidence:.1%})")
+            return speaker, confidence
+        except Exception as e:  # noqa: BLE001
+            print(f"Warning: failed to run voice model: {e}")
+            return None, None
+
+    def run_biometric_auth_loop(self, threshold: float = 0.7, use_pi_camera: bool = False) -> None:
         """
         Continuously run the full biometric pipeline (currently face-based; voice TBD):
 
@@ -94,47 +137,33 @@ class BiometricUnlock:
         try:
             while True:
                 # Run the camera until we capture an aligned face.
-                aligned_face = self.face_preprocessor.capture_aligned_face_from_camera()
+                self.lcd_display.send_message("Waiting for face...")
+                aligned_face = self.face_preprocessor.capture_aligned_face_from_camera(
+                    use_picamera=use_pi_camera
+                )
                 if aligned_face is None:
                     continue
 
                 # Record 3 s from USB mic and run voice inference
-                if self.voice_system:
-                    import sounddevice as sd
-                    import soundfile as sf
-                    import torch
-                    import torchaudio.transforms as T
-                    record_rate, target_rate = 48000, 16000
-                    ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-                    tmp_path = str(PROJECT_ROOT / f"clip_{ts}.wav")
-                    rec = sd.rec(int(3 * record_rate), samplerate=record_rate, channels=1)
-                    sd.wait()
-                    if record_rate != target_rate:
-                        resampler = T.Resample(record_rate, target_rate)
-                        rec_16k = resampler(torch.from_numpy(rec).float().T.unsqueeze(0)).squeeze().numpy()
-                    else:
-                        rec_16k = rec
-                    sf.write(tmp_path, rec_16k, target_rate)
-                    try:
-                        speaker, confidence, _ = self.voice_system.predict(tmp_path)
-                        print(f"Voice: {speaker} ({confidence:.1%})")
+                self.lcd_display.send_message("Face detected\nRecording voice...")
+                speaker, confidence = self._run_voice_model()
+                self.lcd_display.send_message("Finished recording voice")
+                # speaker = "John Doe"
 
                 # Run the face model helper on the captured face.
                 person = self._run_face_model(aligned_face, threshold=threshold)
                 if person is None:
+                    self.lcd_display.send_message("INVALID User")
                     print("User unidentifiable.")
                 else:
                     # Delegate handling of a successful identification to the unlock logic.
-                    self._unlock(person)
+                    print(f"Face id: {person}\nVoice id: {speaker}")
+                    self.lcd_display.send_message(f"Face id: {person}\nVoice id: {speaker}")
+                    # self._unlock(person)
+                time.sleep(3)
+
         except KeyboardInterrupt:
             print("\nFace recognition loop stopped by user.")
-
-    def _run_voice_model(self):
-        """
-        Run the voice recognition model on the current audio segment.
-        Returns the predicted user id/name if confident, else None.
-        """
-        raise NotImplementedError("Voice model not yet implemented")
 
     def _unlock(self, user: str) -> None:
         """
@@ -160,8 +189,9 @@ def main() -> None:
     print(f"Using facial database at: {database_path}")
     unlock_system = BiometricUnlock(database_path=str(database_path))
 
-    # Run continuous biometric authentication loop (Ctrl+C to stop)
-    unlock_system.run_biometric_auth_loop(threshold=0.7)
+    # Run continuous biometric authentication loop (Ctrl+C to stop).
+    # Set use_pi_camera=True on Raspberry Pi to use picamera2; keep False on a Mac/PC.
+    unlock_system.run_biometric_auth_loop(threshold=0.7, use_pi_camera=False)
 
 
 if __name__ == "__main__":

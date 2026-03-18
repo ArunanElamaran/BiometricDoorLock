@@ -4,8 +4,9 @@ facial alignment (detect face + eyes, rotate to align eyes) for path or array in
 """
 
 import math
+import atexit
 from pathlib import Path
-from typing import Generator, Optional, Tuple
+from typing import Any, Generator, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -60,6 +61,50 @@ class ImagePreprocessor:
         )
         self._face_detector: Optional[cv2.CascadeClassifier] = None
         self._eye_detector: Optional[cv2.CascadeClassifier] = None
+        self._picam2: Optional[Any] = None
+        self._picam2_started: bool = False
+
+    def _get_picamera2(self) -> Any:
+        """
+        Lazily create and start a single Picamera2 instance.
+        Reusing a single instance avoids libcamera state errors on repeated init.
+        """
+        if self._picam2 is None:
+            from picamera2 import Picamera2  # type: ignore
+
+            self._picam2 = Picamera2()
+            try:
+                config = self._picam2.create_video_configuration(
+                    main={"format": "RGB888", "size": (640, 480)}
+                )
+            except Exception:  # noqa: BLE001
+                config = self._picam2.create_preview_configuration(
+                    main={"format": "RGB888", "size": (640, 480)}
+                )
+            self._picam2.configure(config)
+            atexit.register(self._stop_picamera2)
+
+        if not self._picam2_started:
+            self._picam2.start()
+            self._picam2_started = True
+        return self._picam2
+
+    def _stop_picamera2(self) -> None:
+        if self._picam2 is None:
+            return
+        try:
+            if self._picam2_started:
+                self._picam2.stop()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            close = getattr(self._picam2, "close", None)
+            if callable(close):
+                close()
+        except Exception:  # noqa: BLE001
+            pass
+        self._picam2_started = False
+        self._picam2 = None
 
     def _get_detectors(
         self,
@@ -75,6 +120,7 @@ class ImagePreprocessor:
         img: np.ndarray,
         face_detector: Optional[cv2.CascadeClassifier] = None,
         eye_detector: Optional[cv2.CascadeClassifier] = None,
+        use_picamera: bool = False,
     ) -> Tuple[Optional[np.ndarray], Optional[Tuple[int, int, int, int]], Optional[Tuple[int, int, int, int]], Optional[Tuple[int, int, int, int]]]:
         """
         Perform facial alignment on a numpy array image (BGR format).
@@ -96,7 +142,8 @@ class ImagePreprocessor:
             fd, ed = self._get_detectors()
 
         # ------ Face detection ------
-        faces = fd.detectMultiScale(img, 1.3, 5)
+        gray_full = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        faces = fd.detectMultiScale(gray_full, 1.3, 5)
         if len(faces) == 0:
             return None, None, None, None
 
@@ -139,6 +186,8 @@ class ImagePreprocessor:
         # If we don't have exactly two eyes, fall back to returning the raw face crop
         # (no alignment) so downstream can still use the detected face.
         if len(eyes) != 2:
+            if use_picamera:
+                return cv2.cvtColor(img_face, cv2.COLOR_BGR2RGB), face_bbox, None, None
             return img_face, face_bbox, None, None
 
         # ------ Left and right eye ------
@@ -154,6 +203,8 @@ class ImagePreprocessor:
         left_eye_center_y = left_eye[1] + (left_eye[3] / 2)
         right_eye_center_y = right_eye[1] + (right_eye[3] / 2)
         if abs(left_eye_center_y - right_eye_center_y) > (face_h / 4):
+            if use_picamera:
+                return cv2.cvtColor(img_face, cv2.COLOR_BGR2RGB), face_bbox, None, None
             return img_face, face_bbox, None, None
 
         # Reject if the two eye boxes overlap
@@ -162,6 +213,8 @@ class ImagePreprocessor:
         overlap_x = max(0, min(lx1 + lw, rx1 + rw) - max(lx1, rx1))
         overlap_y = max(0, min(ly1 + lh, ry1 + rh) - max(ly1, ry1))
         if overlap_x > 0 and overlap_y > 0:
+            if use_picamera:
+                return cv2.cvtColor(img_face, cv2.COLOR_BGR2RGB), face_bbox, None, None
             return img_face, face_bbox, None, None
 
         # ------ Left and right eye center ------
@@ -190,7 +243,7 @@ class ImagePreprocessor:
         c = _euclidean_distance(right_eye_center, point_3rd)
         # Reject degenerate case: coincident eyes or point_3rd same as eye (would divide by zero)
         if b < 1e-6 or c < 1e-6:
-            return img_face, face_bbox, None, None
+            return cv2.cvtColor(img_face, cv2.COLOR_BGR2RGB), face_bbox, None, None if use_picamera else img_face, face_bbox, None, None
         cos_a = (b * b + c * c - a * a) / (2 * b * c)
         angle = np.arccos(np.clip(cos_a, -1.0, 1.0))
         angle_deg = (angle * 180) / math.pi
@@ -239,25 +292,28 @@ class ImagePreprocessor:
             int(expanded_x) : int(expanded_x + expanded_w),
         ]
 
-        # Rotate the expanded region
-        img_expanded_pil = Image.fromarray(img_expanded)
-        img_rotated = np.array(img_expanded_pil.rotate(direction * angle_deg))
+        # Rotate the expanded region using OpenCV so BGR channel order is preserved
+        rot_h, rot_w = img_expanded.shape[:2]
+        center = (rot_w / 2.0, rot_h / 2.0)
+
+        rotation_matrix = cv2.getRotationMatrix2D(center, direction * angle_deg, 1.0)
+        img_rotated = cv2.warpAffine(
+            img_expanded,
+            rotation_matrix,
+            (rot_w, rot_h),
+            flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_REPLICATE,
+        )
 
         # Calculate the center of the rotated image and crop back to original face size
-        # The center of the rotated expanded region corresponds to the center of the original face
-        rot_h, rot_w = img_rotated.shape[:2]
         center_x, center_y = rot_w // 2, rot_h // 2
-
-        # Crop from center to get original face size
         crop_x = center_x - face_w // 2
         crop_y = center_y - face_h // 2
 
-        # Ensure we don't go out of bounds
         crop_x = max(0, min(crop_x, rot_w - face_w))
         crop_y = max(0, min(crop_y, rot_h - face_h))
         new_img = img_rotated[crop_y : crop_y + face_h, crop_x : crop_x + face_w]
 
-        # Ensure we got the right size (in case of boundary issues)
         if new_img.shape[0] != face_h or new_img.shape[1] != face_w:
             new_img = cv2.resize(new_img, (face_w, face_h), interpolation=cv2.INTER_LINEAR)
 
@@ -266,7 +322,10 @@ class ImagePreprocessor:
         right_eye_abs = (face_x + right_eye[0], face_y + right_eye[1], right_eye[2], right_eye[3])
 
         # Return the rotated, aligned face, face bounding box, and eye coordinates for facial recognition
-        return new_img, face_bbox, left_eye_abs, right_eye_abs
+        if use_picamera:
+            return cv2.cvtColor(new_img, cv2.COLOR_BGR2RGB), face_bbox, left_eye_abs, right_eye_abs
+        else:
+            return new_img, face_bbox, left_eye_abs, right_eye_abs
 
     def _array_to_tensor(self, img_bgr: np.ndarray) -> torch.Tensor:
         """Convert BGR numpy array to normalized tensor [1, 3, image_size, image_size]."""
@@ -320,6 +379,7 @@ class ImagePreprocessor:
         camera_index: int = 0,
         stability_frames: int = 5,
         position_threshold: float = 0.15,
+        use_picamera: bool = False,
     ) -> Generator[
         Tuple[
             np.ndarray,
@@ -336,11 +396,29 @@ class ImagePreprocessor:
         Generator that captures camera frames and yields (frame, aligned_face, face_bbox,
         left_eye_abs, right_eye_abs, stable_frame_count) each time. Caller can use this
         for UI or to run until stability. Stops when stable_frame_count >= stability_frames.
+
+        Args:
+            camera_index: Index for cv2 camera when not using picamera2.
+            stability_frames: Required consecutive stable frames.
+            position_threshold: Positional stability threshold.
+            use_picamera: If True, use Raspberry Pi picamera2; otherwise use cv2.VideoCapture.
         """
         face_detector, eye_detector = self._get_detectors()
-        cap = cv2.VideoCapture(camera_index)
-        if not cap.isOpened():
-            return
+        cap = None
+        picam2 = None
+        if use_picamera:
+            # Use Raspberry Pi Camera Module via picamera2.
+            try:
+                picam2 = self._get_picamera2()
+            except Exception as e:  # noqa: BLE001
+                # Fall back to OpenCV (e.g., when running on a development Mac or picamera2 is missing).
+                print(f"Warning: picamera2 unavailable; falling back to cv2 camera. ({e})")
+                use_picamera = False
+
+        if not use_picamera:
+            cap = cv2.VideoCapture(camera_index)
+            if not cap.isOpened():
+                return
 
         previous_face_center = None
         previous_left_eye_center = None
@@ -348,12 +426,16 @@ class ImagePreprocessor:
         stable_frame_count = 0
         try:
             while True:
-                ret, frame = cap.read()
-                if not ret:
-                    break
+                if use_picamera and picam2 is not None:
+                    frame_rgb = picam2.capture_array()
+                    frame = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+                else:
+                    ret, frame = cap.read()  # type: ignore[union-attr]
+                    if not ret:
+                        break
 
                 aligned_face, face_bbox, left_eye_abs, right_eye_abs = self.facial_alignment_from_array(
-                    frame, face_detector, eye_detector
+                    frame, face_detector, eye_detector, use_picamera
                 )
 
                 if aligned_face is not None and face_bbox is not None:
@@ -416,13 +498,15 @@ class ImagePreprocessor:
                     previous_right_eye_center = None
                     yield frame, None, None, None, None, 0
         finally:
-            cap.release()
+            if cap is not None:
+                cap.release()
 
     def capture_aligned_face_from_camera(
         self,
         camera_index: int = 0,
         stability_frames: int = 5,
         position_threshold: float = 0.15,
+        use_picamera: bool = False,
     ) -> Optional[np.ndarray]:
         """
         Capture video from camera and return when a detected face has been stable
@@ -437,11 +521,19 @@ class ImagePreprocessor:
             Aligned face as BGR numpy array, or None if camera fails or no stable face detected.
         """
         last_aligned_face = None
-        for _frame, aligned_face, _bbox, _le, _re, count in self.capture_aligned_face_frames(
-            camera_index, stability_frames, position_threshold
-        ):
-            if aligned_face is not None:
-                last_aligned_face = aligned_face
-            if count >= stability_frames:
-                break
+        gen = self.capture_aligned_face_frames(
+            camera_index=camera_index,
+            stability_frames=stability_frames,
+            position_threshold=position_threshold,
+            use_picamera=use_picamera,
+        )
+        try:
+            for _frame, aligned_face, _bbox, _le, _re, count in gen:
+                if aligned_face is not None:
+                    last_aligned_face = aligned_face
+                if count >= stability_frames:
+                    break
+        finally:
+            # Ensure camera resources are released immediately (important for picamera2).
+            gen.close()
         return last_aligned_face
