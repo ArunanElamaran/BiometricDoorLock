@@ -5,11 +5,17 @@ Authentication runs on user input (e.g. button)
 
 from pathlib import Path
 import sys
+from datetime import datetime
 
 # Ensure project root is on sys.path so we can import Facial_Rec_Development
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
+
+# Add Audio_Rec_Development for voice inference
+AUDIO_REC_ROOT = PROJECT_ROOT / "Audio_Rec_Development" / "voicemodelece113"
+if str(AUDIO_REC_ROOT) not in sys.path:
+    sys.path.insert(0, str(AUDIO_REC_ROOT))
 
 from Facial_Rec_Development.model import FaceRecognitionSystem
 from Facial_Rec_Development.ImageProcessor import ImagePreprocessor
@@ -53,6 +59,16 @@ class BiometricUnlock:
         except Exception as e:  # noqa: BLE001
             print(f"Warning: failed to build face database embeddings: {e}")
 
+        # Voice pipeline: load model from Audio_Rec_Development
+        voice_model_path = AUDIO_REC_ROOT / "best_model.pt"
+        self.voice_system = None
+        if voice_model_path.is_file():
+            try:
+                from infer import load_system
+                self.voice_system = load_system(voice_model_path, None)
+            except Exception as e:  # noqa: BLE001
+                print(f"Warning: failed to load voice model: {e}")
+
     def _run_face_model(self, aligned_face, threshold: float = 0.7):
         """
         Run the face recognition model on an already aligned face crop.
@@ -81,6 +97,19 @@ class BiometricUnlock:
                 aligned_face = self.face_preprocessor.capture_aligned_face_from_camera()
                 if aligned_face is None:
                     continue
+
+                # Record 3 s from USB mic and run voice inference
+                if self.voice_system:
+                    import sounddevice as sd
+                    import soundfile as sf
+                    ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+                    tmp_path = str(PROJECT_ROOT / f"clip_{ts}.wav")
+                    rec = sd.rec(int(3 * 16000), samplerate=16000, channels=1)
+                    sd.wait()
+                    sf.write(tmp_path, rec, 16000)
+                    try:
+                        speaker, confidence, _ = self.voice_system.predict(tmp_path)
+                        print(f"Voice: {speaker} ({confidence:.1%})")
 
                 # Run the face model helper on the captured face.
                 person = self._run_face_model(aligned_face, threshold=threshold)
