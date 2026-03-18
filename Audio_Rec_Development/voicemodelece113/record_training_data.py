@@ -5,6 +5,7 @@ Saves to DATA_DIR/speaker/word/word_speaker_N.wav
 """
 
 from pathlib import Path
+from datetime import datetime
 
 import sounddevice as sd
 import soundfile as sf
@@ -33,23 +34,6 @@ def record_word():
     else:
         rec_16k = rec
     return rec_16k
-
-
-def get_next_index(speaker_dir: Path, word: str, speaker: str) -> int:
-    """Get next index for word_speaker_N.wav (or word_speaker_N.m4a)."""
-    word_dir = speaker_dir / word
-    if not word_dir.exists():
-        return 1
-    existing = list(word_dir.glob(f"{word}_{speaker}_*"))
-    indices = []
-    for f in existing:
-        stem = f.stem
-        try:
-            n = int(stem.split("_")[-1])
-            indices.append(n)
-        except ValueError:
-            pass
-    return max(indices, default=0) + 1
 
 
 def main() -> None:
@@ -92,10 +76,10 @@ def main() -> None:
         input(f"Press Enter, then say '{word}'... ")
         print("Recording...")
         audio = record_word()
-        idx = get_next_index(speaker_dir, word, speaker)
+        ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S-%f")[:-3]  # ms precision
         word_dir = speaker_dir / word
         word_dir.mkdir(exist_ok=True)
-        out_path = word_dir / f"{word}_{speaker}_{idx}.wav"
+        out_path = word_dir / f"{word}_{speaker}_{ts}.wav"
         sf.write(str(out_path), audio, TARGET_RATE)
         print(f"  Saved: {out_path}\n")
 
