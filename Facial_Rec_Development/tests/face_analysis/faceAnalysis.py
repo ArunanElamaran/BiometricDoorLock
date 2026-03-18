@@ -259,7 +259,8 @@ def capture_aligned_face_from_camera(
     eye_cascade_path: str = '../../haarcascades_models/haarcascade_eye.xml',
     display_preview=True,
     stability_frames=5,
-    position_threshold=0.15
+    position_threshold=0.15,
+    use_picamera: bool = False,
 ):
     """
     Capture video from camera and stop when a properly detected face is found and stable.
@@ -282,6 +283,7 @@ def capture_aligned_face_from_camera(
             camera_index=camera_index,
             stability_frames=stability_frames,
             position_threshold=position_threshold,
+            use_picamera=use_picamera,
         )
 
     # With display: use generator and add UI
@@ -293,6 +295,7 @@ def capture_aligned_face_from_camera(
         camera_index=camera_index,
         stability_frames=stability_frames,
         position_threshold=position_threshold,
+        use_picamera=use_picamera,
     )
     try:
         for frame, aligned_face, face_bbox, left_eye_abs, right_eye_abs, stable_frame_count in gen:
@@ -396,13 +399,32 @@ if __name__ == "__main__":
     # 3. Testing with a live video
     # camera_test()
     # realtime_video_analysis()
-    aligned_face = capture_aligned_face_from_camera()
-    cv2.imshow('aligned_face', aligned_face)
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
+    # On Raspberry Pi, prefer picamera2 if installed.
+    import os
+    import platform
+
+    use_picamera = False
+    if platform.system().lower() == "linux":
+        try:
+            import picamera2  # noqa: F401
+
+            use_picamera = True
+        except Exception:
+            use_picamera = False
+
+    aligned_face = capture_aligned_face_from_camera(use_picamera=use_picamera)
     if aligned_face is None:
         print("face not detected properly")
         exit()
+    # Show the captured face on laptops/desktop sessions.
+    # Suppress OpenCV windows only for headless Linux (common when SSH'd into a Pi).
+    show_windows = True
+    if platform.system().lower() == "linux" and not os.environ.get("DISPLAY"):
+        show_windows = False
+    if show_windows:
+        cv2.imshow('aligned_face', aligned_face)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
     print(f"Size of aligned face: {aligned_face.shape}")
     resized_face = resize_aligned_face(aligned_face, (160, 160))  # For Facenet
     print(f"Size of resized face: {resized_face.shape}")
