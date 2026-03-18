@@ -138,10 +138,10 @@ class BiometricUnlock:
                     continue
 
                 # Record 3 s from USB mic and run voice inference
-                # self.lcd_display.send_message("Face detected\nRecording voice...")
-                # speaker, confidence = self._run_voice_model()
-                # self.lcd_display.send_message("Finished recording voice")
-                speaker = "John Doe"
+                self.lcd_display.send_message("Face detected\nRecording voice...")
+                speaker, confidence = self._run_voice_model()
+                self.lcd_display.send_message("Finished recording voice")
+                # speaker = "John Doe"
 
                 # Run the face model helper on the captured face.
                 person = self._run_face_model(aligned_face, threshold=threshold)
