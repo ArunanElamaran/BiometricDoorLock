@@ -42,6 +42,18 @@ class _FaceDataset(Dataset):
         return x.squeeze(0), self.labels[i]
 
 
+def _make_conv_block(in_c: int, out_c: int, num_convs: int) -> nn.Sequential:
+    layers: list[nn.Module] = []
+    for i in range(num_convs):
+        layers += [
+            nn.ZeroPad2d(1),
+            nn.Conv2d(in_c if i == 0 else out_c, out_c, kernel_size=3),
+            nn.ReLU(inplace=True),
+        ]
+    layers.append(nn.MaxPool2d(2, stride=2))
+    return nn.Sequential(*layers)
+
+
 class LightweightFaceNet(nn.Module):
     """
     VGG-style face network (input 224x224).
@@ -296,7 +308,7 @@ class FaceRecognitionSystem:
         If debug_failures=True, each failed image is shown during the
         path-collection phase; press ESC to continue."""
         # Warm start from existing best checkpoint if available
-        best_path = Path("best_model.pt")
+        best_path = Path(__file__).resolve().parent / "best_model.pt"
         if best_path.is_file():
             print(f"Found existing checkpoint at {best_path}, loading before training...")
             self.load(str(best_path))
@@ -408,7 +420,7 @@ class FaceRecognitionSystem:
 
             if len(val_paths) > 0 and val_acc > best_val_acc:
                 best_val_acc = val_acc
-                self.save("best_model.pt")
+                self.save(str(best_path))
 
             if len(val_paths) > 0:
                 print(
@@ -428,7 +440,7 @@ class FaceRecognitionSystem:
             + (f" Best validation accuracy: {best_val_acc:.2%}" if len(val_paths) > 0 else " (no validation set)")
         )
         if len(val_paths) > 0:
-            self.load("best_model.pt")
+            self.load(str(best_path))
 
     def predict(self, image_path: str) -> tuple[str, float, dict]:
         """
@@ -642,7 +654,11 @@ def print_model_info(model: LightweightFaceNet):
 
 
 if __name__ == "__main__":
-    system = FaceRecognitionSystem(num_persons=5)
+    system = FaceRecognitionSystem(num_persons=480)
+    # Automatically load pretrained weights from best_model.pt next to this file, if present.
+    default_ckpt = Path(__file__).resolve().parent / "best_model.pt"
+    if default_ckpt.is_file():
+        system.load(str(default_ckpt))
     print_model_info(system.model)
     print("\nMemory usage:")
     for k, v in system.memory_usage().items():
