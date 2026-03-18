@@ -320,6 +320,7 @@ class ImagePreprocessor:
         camera_index: int = 0,
         stability_frames: int = 5,
         position_threshold: float = 0.15,
+        use_picamera: bool = False,
     ) -> Generator[
         Tuple[
             np.ndarray,
@@ -336,11 +337,42 @@ class ImagePreprocessor:
         Generator that captures camera frames and yields (frame, aligned_face, face_bbox,
         left_eye_abs, right_eye_abs, stable_frame_count) each time. Caller can use this
         for UI or to run until stability. Stops when stable_frame_count >= stability_frames.
+
+        Args:
+            camera_index: Index for cv2 camera when not using picamera2.
+            stability_frames: Required consecutive stable frames.
+            position_threshold: Positional stability threshold.
+            use_picamera: If True, use Raspberry Pi picamera2; otherwise use cv2.VideoCapture.
         """
         face_detector, eye_detector = self._get_detectors()
-        cap = cv2.VideoCapture(camera_index)
-        if not cap.isOpened():
-            return
+        cap = None
+        picam2 = None
+        if use_picamera:
+            # Use Raspberry Pi Camera Module via picamera2.
+            try:
+                from picamera2 import Picamera2  # type: ignore
+
+                picam2 = Picamera2()
+                # Pick a common RGB format; support multiple picamera2 versions.
+                try:
+                    config = picam2.create_video_configuration(
+                        main={"format": "RGB888", "size": (640, 480)}
+                    )
+                except Exception:  # noqa: BLE001
+                    config = picam2.create_preview_configuration(
+                        main={"format": "RGB888", "size": (640, 480)}
+                    )
+                picam2.configure(config)
+                picam2.start()
+            except Exception as e:  # noqa: BLE001
+                # Fall back to OpenCV (e.g., when running on a development Mac or picamera2 is missing).
+                print(f"Warning: picamera2 unavailable; falling back to cv2 camera. ({e})")
+                use_picamera = False
+
+        if not use_picamera:
+            cap = cv2.VideoCapture(camera_index)
+            if not cap.isOpened():
+                return
 
         previous_face_center = None
         previous_left_eye_center = None
@@ -348,9 +380,13 @@ class ImagePreprocessor:
         stable_frame_count = 0
         try:
             while True:
-                ret, frame = cap.read()
-                if not ret:
-                    break
+                if use_picamera and picam2 is not None:
+                    frame_rgb = picam2.capture_array()
+                    frame = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+                else:
+                    ret, frame = cap.read()  # type: ignore[union-attr]
+                    if not ret:
+                        break
 
                 aligned_face, face_bbox, left_eye_abs, right_eye_abs = self.facial_alignment_from_array(
                     frame, face_detector, eye_detector
@@ -416,13 +452,20 @@ class ImagePreprocessor:
                     previous_right_eye_center = None
                     yield frame, None, None, None, None, 0
         finally:
-            cap.release()
+            if picam2 is not None:
+                try:
+                    picam2.stop()
+                except Exception:  # noqa: BLE001
+                    pass
+            if cap is not None:
+                cap.release()
 
     def capture_aligned_face_from_camera(
         self,
         camera_index: int = 0,
         stability_frames: int = 5,
         position_threshold: float = 0.15,
+        use_picamera: bool = False,
     ) -> Optional[np.ndarray]:
         """
         Capture video from camera and return when a detected face has been stable
@@ -438,7 +481,10 @@ class ImagePreprocessor:
         """
         last_aligned_face = None
         for _frame, aligned_face, _bbox, _le, _re, count in self.capture_aligned_face_frames(
-            camera_index, stability_frames, position_threshold
+            camera_index=camera_index,
+            stability_frames=stability_frames,
+            position_threshold=position_threshold,
+            use_picamera=use_picamera,
         ):
             if aligned_face is not None:
                 last_aligned_face = aligned_face

@@ -114,7 +114,7 @@ class BiometricUnlock:
                 print(f"Warning: failed to run voice model: {e}")
                 return None, None
 
-    def run_biometric_auth_loop(self, threshold: float = 0.7) -> None:
+    def run_biometric_auth_loop(self, threshold: float = 0.7, use_pi_camera: bool = False) -> None:
         """
         Continuously run the full biometric pipeline (currently face-based; voice TBD):
 
@@ -130,7 +130,9 @@ class BiometricUnlock:
             while True:
                 # Run the camera until we capture an aligned face.
                 self.lcd_display.send_message("Waiting for face...")
-                aligned_face = self.face_preprocessor.capture_aligned_face_from_camera()
+                aligned_face = self.face_preprocessor.capture_aligned_face_from_camera(
+                    use_picamera=use_pi_camera
+                )
                 if aligned_face is None:
                     continue
 
@@ -178,8 +180,9 @@ def main() -> None:
     print(f"Using facial database at: {database_path}")
     unlock_system = BiometricUnlock(database_path=str(database_path))
 
-    # Run continuous biometric authentication loop (Ctrl+C to stop)
-    unlock_system.run_biometric_auth_loop(threshold=0.7)
+    # Run continuous biometric authentication loop (Ctrl+C to stop).
+    # Set use_pi_camera=True on Raspberry Pi to use picamera2; keep False on a Mac/PC.
+    unlock_system.run_biometric_auth_loop(threshold=0.7, use_pi_camera=False)
 
 
 if __name__ == "__main__":
