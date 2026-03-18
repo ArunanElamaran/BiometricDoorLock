@@ -158,7 +158,9 @@ class BiometricUnlock:
                 else:
                     # Delegate handling of a successful identification to the unlock logic.
                     print(f"Face id: {person}\nVoice id: {speaker}")
-                    self.lcd_display.send_message(f"F: {person} V: {speaker}\nM: {person == speaker}")
+                    person_lc = str(person).strip().lower()
+                    speaker_lc = str(speaker).strip().lower() if speaker is not None else ""
+                    self.lcd_display.send_message(f"F: {person} V: {speaker}\nM: {person_lc == speaker_lc}")
                     # self._unlock(person)
                 time.sleep(3)
 
