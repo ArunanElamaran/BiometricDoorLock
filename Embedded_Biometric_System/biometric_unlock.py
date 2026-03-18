@@ -53,55 +53,42 @@ class BiometricUnlock:
         except Exception as e:  # noqa: BLE001
             print(f"Warning: failed to build face database embeddings: {e}")
 
-    def on_user_request_authentication(self) -> None:
+    def _run_face_model(self, aligned_face, threshold: float = 0.7):
         """
-        Entry point when the user requests access (e.g. button press).
-        Captures sensor data, runs both models, and unlocks only if they agree.
-        """
-        face_user = self._run_face_model()
-        voice_user = self._run_voice_model()
-
-        if face_user is not None and voice_user is not None and face_user == voice_user:
-            self._unlock()
-        # else: reject (no unlock)
-
-    def _run_face_model(self):
-        """
-        Run the face recognition model on the current camera frame.
+        Run the face recognition model on an already aligned face crop.
         Returns the predicted user id/name if confident, else None.
         """
-        # 1. Capture a stable, aligned face from the camera
-        aligned_face = self.face_preprocessor.capture_aligned_face_from_camera()
         if aligned_face is None:
             return None
+        # Single place where we call into FaceRecognitionSystem for identification.
+        return self.face_system(aligned_face, threshold=threshold)
 
-        # 2. Run the facial recognition system on the captured face.
-        #    The FaceRecognitionSystem.__call__ performs the similarity check
-        #    against the cached database embeddings with its default threshold.
-        person = self.face_system(aligned_face)
-        return person
-
-    def run_face_recognition_loop(self, threshold: float = 0.7) -> None:
+    def run_biometric_auth_loop(self, threshold: float = 0.7) -> None:
         """
-        Continuously run camera-based face recognition:
+        Continuously run the full biometric pipeline (currently face-based; voice TBD):
 
-            capture aligned face -> run model -> similarity check vs database
-            -> print identified user or 'unidentifiable' -> repeat.
+            run camera until a face is detected
+            -> run face model helper on the captured face
+            -> perform similarity check vs database inside FaceRecognitionSystem
+            -> call _unlock(user) or report that no one is identified
 
         Press Ctrl+C to exit the loop.
         """
-        print("Starting face recognition loop. Press Ctrl+C to exit.")
+        print("Starting biometric authentication loop. Press Ctrl+C to exit.")
         try:
             while True:
+                # Run the camera until we capture an aligned face.
                 aligned_face = self.face_preprocessor.capture_aligned_face_from_camera()
                 if aligned_face is None:
                     continue
 
-                person = self.face_system(aligned_face, threshold=threshold)
+                # Run the face model helper on the captured face.
+                person = self._run_face_model(aligned_face, threshold=threshold)
                 if person is None:
                     print("User unidentifiable.")
                 else:
-                    print(f"Recognized user: {person}")
+                    # Delegate handling of a successful identification to the unlock logic.
+                    self._unlock(person)
         except KeyboardInterrupt:
             print("\nFace recognition loop stopped by user.")
 
@@ -112,23 +99,23 @@ class BiometricUnlock:
         """
         raise NotImplementedError("Voice model not yet implemented")
 
-    def _unlock(self) -> None:
+    def _unlock(self, user: str) -> None:
         """
         Send control signal to the lock actuator (e.g. servo) to unlock.
         """
-        raise NotImplementedError("Lock actuator not yet implemented")
+        raise NotImplementedError(f"Lock actuator not yet implemented (recognized user: {user})")
 
 
 def main() -> None:
     """
-    Simple entry point to exercise the face-recognition pipeline end-to-end.
+    Simple entry point to exercise the biometric authentication pipeline end-to-end.
 
     - Initializes BiometricUnlock (which loads the face model and builds the database embeddings).
     - Starts an infinite loop that:
-        * captures an aligned face from the camera
-        * runs it through the model
+        * runs the camera until a face is detected
+        * runs the captured face through the model helper
         * performs the similarity check against the facial database
-        * prints the recognized user or 'unidentifiable'
+        * calls _unlock(user) or reports that no one is identified
     """
     project_root = PROJECT_ROOT
     database_path = project_root / "Facial_Rec_Development" / "database"
@@ -136,8 +123,8 @@ def main() -> None:
     print(f"Using facial database at: {database_path}")
     unlock_system = BiometricUnlock(database_path=str(database_path))
 
-    # Run continuous face recognition loop (Ctrl+C to stop)
-    unlock_system.run_face_recognition_loop(threshold=0.7)
+    # Run continuous biometric authentication loop (Ctrl+C to stop)
+    unlock_system.run_biometric_auth_loop(threshold=0.7)
 
 
 if __name__ == "__main__":

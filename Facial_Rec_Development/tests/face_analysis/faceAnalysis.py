@@ -344,7 +344,7 @@ def resize_aligned_face(aligned_face, target_size):
 ########################################################
 
 def camera_test():
-    # Check if your system can detect camera and what is the source number
+    # Check if system can detect camera and what is the source number
     cams_test = 10
     for i in range(0, cams_test):
         cap = cv2.VideoCapture(i)
