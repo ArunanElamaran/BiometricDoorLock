@@ -4,6 +4,7 @@ import time
 
 try:
     import serial
+    from serial.tools import list_ports
 except ImportError as e:
     raise ImportError("pyserial is required. Install it with: pip install pyserial") from e
 
@@ -69,3 +70,19 @@ class LCDUARTDisplay:
         line1, line2 = self._split_message(message)
         self.clear()
         self._write_lines(line1, line2)
+
+
+def main() -> None:
+    ports = list(list_ports.comports())
+
+    if not ports:
+        print("No serial ports found.")
+        return
+
+    print("Available serial ports:")
+    for port in ports:
+        print(f"  {port.device} - {port.description}")
+
+
+if __name__ == "__main__":
+    main()
