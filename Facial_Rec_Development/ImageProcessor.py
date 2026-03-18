@@ -141,7 +141,8 @@ class ImagePreprocessor:
             fd, ed = self._get_detectors()
 
         # ------ Face detection ------
-        faces = fd.detectMultiScale(img, 1.3, 5)
+        gray_full = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        faces = fd.detectMultiScale(gray_full, 1.3, 5)
         if len(faces) == 0:
             return None, None, None, None
 
@@ -284,25 +285,28 @@ class ImagePreprocessor:
             int(expanded_x) : int(expanded_x + expanded_w),
         ]
 
-        # Rotate the expanded region
-        img_expanded_pil = Image.fromarray(img_expanded)
-        img_rotated = np.array(img_expanded_pil.rotate(direction * angle_deg))
+        # Rotate the expanded region using OpenCV so BGR channel order is preserved
+        rot_h, rot_w = img_expanded.shape[:2]
+        center = (rot_w / 2.0, rot_h / 2.0)
+
+        rotation_matrix = cv2.getRotationMatrix2D(center, direction * angle_deg, 1.0)
+        img_rotated = cv2.warpAffine(
+            img_expanded,
+            rotation_matrix,
+            (rot_w, rot_h),
+            flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_REPLICATE,
+        )
 
         # Calculate the center of the rotated image and crop back to original face size
-        # The center of the rotated expanded region corresponds to the center of the original face
-        rot_h, rot_w = img_rotated.shape[:2]
         center_x, center_y = rot_w // 2, rot_h // 2
-
-        # Crop from center to get original face size
         crop_x = center_x - face_w // 2
         crop_y = center_y - face_h // 2
 
-        # Ensure we don't go out of bounds
         crop_x = max(0, min(crop_x, rot_w - face_w))
         crop_y = max(0, min(crop_y, rot_h - face_h))
         new_img = img_rotated[crop_y : crop_y + face_h, crop_x : crop_x + face_w]
 
-        # Ensure we got the right size (in case of boundary issues)
         if new_img.shape[0] != face_h or new_img.shape[1] != face_w:
             new_img = cv2.resize(new_img, (face_w, face_h), interpolation=cv2.INTER_LINEAR)
 
