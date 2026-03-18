@@ -15,8 +15,8 @@ import torchaudio.transforms as T
 # Output in voicemodelece113 dir; change to PROJECT_ROOT if you want BiometricDoorLock root
 OUTPUT_DIR = Path(__file__).resolve().parent
 
-# Many USB mics only support 44100 or 48000 Hz; model expects 16 kHz
-RECORD_RATE = 44100
+# USB mic at 48 kHz; model expects 16 kHz
+RECORD_RATE = 48000
 TARGET_RATE = 16000
 
 

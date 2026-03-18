@@ -104,8 +104,7 @@ class BiometricUnlock:
                     import soundfile as sf
                     import torch
                     import torchaudio.transforms as T
-                    # Many USB mics only support 44100/48000 Hz; model expects 16 kHz
-                    record_rate, target_rate = 44100, 16000
+                    record_rate, target_rate = 48000, 16000
                     ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
                     tmp_path = str(PROJECT_ROOT / f"clip_{ts}.wav")
                     rec = sd.rec(int(3 * record_rate), samplerate=record_rate, channels=1)
