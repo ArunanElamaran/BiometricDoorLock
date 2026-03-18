@@ -13,7 +13,7 @@ guide and the Hailo SDK tools:
 2) Optimize:  `hailo optimize <model.har> --hw-arch hailo8l --use-random-calib-set`
 3) Compile:   `hailo compiler <model.har> --hw-arch hailo8l`
 
-You can switch to the Python `ClientRunner` API if you prefer, but this script
+Can switch to the Python `ClientRunner` API if preferred, but this script
 sticks to the documented CLI flow.
 """
 

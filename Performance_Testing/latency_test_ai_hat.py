@@ -211,7 +211,7 @@ def _onnx_cpu_latency_for_model(
     except ImportError as exc:
         raise RuntimeError(
             "onnxruntime is required for CPU ONNX benchmarks. "
-            "Install it with `pip install onnxruntime` in your environment."
+            "Install it with `pip install onnxruntime` in environment."
         ) from exc
 
     # Keep CPU threading conservative on the Pi to reduce variability and avoid
@@ -261,7 +261,7 @@ def _parse_params_from_hef_name(hef_path: Path) -> int | None:
     """
     Best-effort extraction of parameter count from HEF filename.
 
-    If your HEF files are named like `model_20000.hef` or `net-100M.hef`,
+    If HEF files are named like `model_20000.hef` or `net-100M.hef`,
     this will pull out the first integer substring (e.g. 20000 or 100).
     """
     # NOTE: this is intended to match digits in filenames like:
@@ -285,7 +285,7 @@ def export_synthetic_mlp_to_onnx(target_params: int, onnx_path: Path) -> None:
     dummy = torch.randn(1, input_dim, dtype=torch.float32)
     onnx_path.parent.mkdir(parents=True, exist_ok=True)
     # Use a relatively recent ONNX opset to avoid version‑conversion issues.
-    # Hailo's compiler will tell you if it needs a different opset.
+    # Hailo's compiler will tell if it needs a different opset.
     torch.onnx.export(
         model,
         dummy,
@@ -310,7 +310,7 @@ def generate_hailo_models(
         {hef_dir} - directory where HEF files should be written
         {params} - target parameter count (integer)
 
-    Example (hailomz-based, adjust to your environment):
+    Example (hailomz-based, adjust to environment):
         --hailo-compile-template \\
           "hailomz compile mlp_{params} --ckpt={onnx} --hw-arch hailo8l \\
              --calib-path /path/to/calib --performance --output-dir {hef_dir}"

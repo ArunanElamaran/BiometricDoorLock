@@ -51,7 +51,6 @@ class BiometricUnlock:
                 str(self.face_system._database_dir)
             )
         except Exception as e:  # noqa: BLE001
-            # In an embedded system you'd likely log this and keep running
             print(f"Warning: failed to build face database embeddings: {e}")
 
     def on_user_request_authentication(self) -> None:
