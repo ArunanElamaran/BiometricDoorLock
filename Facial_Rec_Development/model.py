@@ -1,7 +1,5 @@
 """
 Face Recognition Model
-VGG-style CNN for face / identity classification and embedding.
-Expects input size 224x224; use ImagePreprocessor with image_size=224.
 
 Requirements:
     pip install torch torchvision numpy
@@ -56,7 +54,6 @@ def _make_conv_block(in_c: int, out_c: int, num_convs: int) -> nn.Sequential:
 
 class LightweightFaceNet(nn.Module):
     """
-    VGG-style face network (input 224x224).
     Same interface as project: num_persons, embedding_dim, forward(), get_embedding().
     """
 
